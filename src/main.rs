@@ -5,10 +5,13 @@ use crate::provisioner::Provisioner;
 use clap::{Args, Parser};
 use clap::Subcommand;
 use color_eyre::Result;
+use crate::controller::Controller;
 
 pub mod ext;
 pub mod provisioner;
+pub mod controller;
 pub mod quantity_parser;
+pub mod config;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -42,16 +45,20 @@ async fn main() -> Result<()> {
     if let Some(command) = &cli.command {
         match command {
             Command::Provision(args) => {
-                let provisioner = Provisioner::create().await?;
-                provisioner.provision_persistent_volume_by_claim_name(
-                    args.pvc_namespace.as_str(),
-                    args.pvc_name.as_str(),
-                    args.node_name.as_str(),
-                ).await
+                Provisioner::create()
+                    .await?
+                    .provision_persistent_volume_by_claim_name(
+                        args.pvc_namespace.as_str(),
+                        args.pvc_name.as_str(),
+                        args.node_name.as_str(),
+                    )
+                    .await
             }
         }
     } else {
-        let mut provisioner = Provisioner::create().await?;
-        provisioner.run().await
+        Controller::create()
+            .await?
+            .run()
+            .await
     }
 }
