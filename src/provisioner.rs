@@ -19,10 +19,11 @@ use crate::quantity_parser::QuantityParser;
 
 pub struct Provisioner {
     client: Client,
+    node_name: String,
 }
 
 impl Provisioner {
-    pub async fn create() -> Result<Self> {
+    pub async fn create(node_name: String) -> Result<Self> {
         let client = Client::try_default()
             .await
             .or_else(|_| Client::try_from(Config::incluster_env().expect("Failed to load in-cluster Kube config")))
@@ -30,19 +31,20 @@ impl Provisioner {
 
         Ok(Provisioner {
             client,
+            node_name,
         })
     }
 
-    pub async fn provision_persistent_volume_by_claim_name(&self, claim_namespace: &str, claim_name: &str, node_name: &str) -> Result<()> {
+    pub async fn provision_persistent_volume_by_claim_name(&self, claim_namespace: &str, claim_name: &str) -> Result<()> {
         let client = self.client();
 
         let persistent_volume_claims = Api::<PersistentVolumeClaim>::namespaced(client.clone(), claim_namespace);
 
         let claim = persistent_volume_claims.get(claim_name).await?;
-        self.provision_persistent_volume(&claim, node_name).await
+        self.provision_persistent_volume(&claim).await
     }
 
-    pub async fn provision_persistent_volume(&self, claim: &PersistentVolumeClaim, node_name: &str) -> Result<()> {
+    pub async fn provision_persistent_volume(&self, claim: &PersistentVolumeClaim) -> Result<()> {
         Provisioner::prepare_directories()?;
         let client = self.client();
 
@@ -116,7 +118,7 @@ impl Provisioner {
                                 match_expressions: Some(vec![NodeSelectorRequirement {
                                     key: NODE_HOSTNAME_KEY.into(),
                                     operator: "In".into(),
-                                    values: Some(vec![node_name.into()]),
+                                    values: Some(vec![self.node_name.to_owned()]),
                                 }]),
                                 ..Default::default()
                             }]

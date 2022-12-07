@@ -1,5 +1,3 @@
-use std::thread::sleep;
-use std::time::Duration;
 use build_time::build_time_local;
 use crate::provisioner::Provisioner;
 use clap::{Args, Parser};
@@ -45,12 +43,11 @@ async fn main() -> Result<()> {
     if let Some(command) = &cli.command {
         match command {
             Command::Provision(args) => {
-                Provisioner::create()
+                Provisioner::create(args.node_name.to_owned())
                     .await?
                     .provision_persistent_volume_by_claim_name(
                         args.pvc_namespace.as_str(),
                         args.pvc_name.as_str(),
-                        args.node_name.as_str(),
                     )
                     .await
             }
