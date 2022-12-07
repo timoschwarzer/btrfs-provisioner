@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: test-postgres
+spec:
+  selector:
+    matchLabels:
+      app: test-postgres
+  serviceName: test-postgres
+  template:
+    metadata:
+      labels:
+        app: test-postgres
+    spec:
+      containers:
+      - name: test-postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_PASSWORD
+          value: 'somepassword'
+        volumeMounts:
+        - name: test-postgres
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: test-postgres
+      annotations:
+        btrfs-provisioner.timo.schwarzer.dev/node: k3d-k3s-default-agent-0
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: btrfs-provisioner
+      resources:
+        requests:
+          storage: 1Gi

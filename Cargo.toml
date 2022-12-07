@@ -1,0 +1,25 @@
+[package]
+name = "btrfs-provisioner"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.dev.package.backtrace]
+opt-level = 3
+
+[dependencies]
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+kube = { version = "0.76.0", features = ["runtime", "derive"] }
+k8s-openapi = { version = "0.16.0", features = ["v1_25"] }
+serde = "1"
+serde_json = "1.0"
+serde_yaml = "0.9"
+schemars = "0.8"
+thiserror = "1"
+futures-util = "0.3"
+rand = "0.8.5"
+mkdirp = "1.0.0"
+clap = { version = "4.0.29", features = ["derive", "env"] }
+regex = "1"
+color-eyre = "0.6.2"
+build-time = "0.1.2"
