@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use color_eyre::Result;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, Pod, PodSpec, SecurityContext, Volume, VolumeMount};
+use k8s_openapi::api::batch::v1::{Job, JobSpec};
+use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client, Config, ResourceExt};
@@ -111,8 +112,8 @@ impl Controller {
 
                             let node_name = annotations.get(NODE_ANNOTATION_NAME).unwrap();
 
-                            println!("Starting volume provisioning helper pod on Node {}", node_name);
-                            self.deploy_helper_pod("provision-volume", node_name, &["provision", claim_namespace, claim_name]).await?;
+                            println!("Deploying volume provisioning job on Node {}", node_name);
+                            self.deploy_provisioner_job("provision-volume", node_name, &["provision", claim_namespace, claim_name]).await?;
                         }
                     }
                     "Bound" => {
@@ -194,64 +195,70 @@ impl Controller {
         Ok(())
     }
 
-    async fn deploy_helper_pod(&self, name: &str, node_name: &str, args: &[&str]) -> Result<()> {
-        let client = self.client();
-        let pods = Api::<Pod>::namespaced(client, NAMESPACE);
+    async fn deploy_provisioner_job(&self, name: &str, node_name: &str, args: &[&str]) -> Result<()> {
+        let jobs = Api::<Job>::namespaced(self.client(), NAMESPACE);
 
-        pods.create(&PostParams::default(), &Pod {
+        jobs.create(&PostParams::default(), &Job {
             metadata: ObjectMeta {
                 generate_name: Some(name.to_owned() + "-"),
                 ..ObjectMeta::default()
             },
-            spec: Some(PodSpec {
-                restart_policy: Some("OnFailure".into()),
-                node_name: Some(node_name.into()),
-                service_account_name: Some(SERVICE_ACCOUNT_NAME.into()),
-                containers: vec![Container {
-                    name: "provisioner".into(),
-                    image: Some(IMAGE.into()),
-                    image_pull_policy: Some("IfNotPresent".into()),
-                    args: Some(args.iter().map(|s| String::from(*s)).collect()),
-                    env: Some(vec![
-                        EnvVar {
-                            name: HOST_FS_ENV_NAME.into(),
-                            value: Some("/host".into()),
-                            ..EnvVar::default()
-                        },
-                        EnvVar {
-                            name: "NODE_NAME".into(),
-                            value_from: Some(EnvVarSource {
-                                field_ref: Some(ObjectFieldSelector {
-                                    field_path: "spec.nodeName".into(),
-                                    ..ObjectFieldSelector::default()
-                                }),
-                                ..EnvVarSource::default()
+            spec: Some(JobSpec {
+                ttl_seconds_after_finished: Some(600),
+                template: PodTemplateSpec {
+                    spec: Some(PodSpec {
+                        restart_policy: Some("OnFailure".into()),
+                        node_name: Some(node_name.into()),
+                        service_account_name: Some(SERVICE_ACCOUNT_NAME.into()),
+                        containers: vec![Container {
+                            name: "provisioner".into(),
+                            image: Some(IMAGE.into()),
+                            image_pull_policy: Some("IfNotPresent".into()),
+                            args: Some(args.iter().map(|s| String::from(*s)).collect()),
+                            env: Some(vec![
+                                EnvVar {
+                                    name: HOST_FS_ENV_NAME.into(),
+                                    value: Some("/host".into()),
+                                    ..EnvVar::default()
+                                },
+                                EnvVar {
+                                    name: "NODE_NAME".into(),
+                                    value_from: Some(EnvVarSource {
+                                        field_ref: Some(ObjectFieldSelector {
+                                            field_path: "spec.nodeName".into(),
+                                            ..ObjectFieldSelector::default()
+                                        }),
+                                        ..EnvVarSource::default()
+                                    }),
+                                    ..EnvVar::default()
+                                },
+                            ]),
+                            security_context: Some(SecurityContext {
+                                privileged: Some(true),
+                                ..SecurityContext::default()
                             }),
-                            ..EnvVar::default()
-                        },
-                    ]),
-                    security_context: Some(SecurityContext {
-                        privileged: Some(true),
-                        ..SecurityContext::default()
+                            volume_mounts: Some(vec![VolumeMount {
+                                name: "host".into(),
+                                mount_path: "/host".into(),
+                                ..VolumeMount::default()
+                            }]),
+                            ..Container::default()
+                        }],
+                        volumes: Some(vec![Volume {
+                            name: "host".into(),
+                            host_path: Some(HostPathVolumeSource {
+                                path: "/".into(),
+                                ..HostPathVolumeSource::default()
+                            }),
+                            ..Volume::default()
+                        }]),
+                        ..PodSpec::default()
                     }),
-                    volume_mounts: Some(vec![VolumeMount {
-                        name: "host".into(),
-                        mount_path: "/host".into(),
-                        ..VolumeMount::default()
-                    }]),
-                    ..Container::default()
-                }],
-                volumes: Some(vec![Volume {
-                    name: "host".into(),
-                    host_path: Some(HostPathVolumeSource {
-                        path: "/".into(),
-                        ..HostPathVolumeSource::default()
-                    }),
-                    ..Volume::default()
-                }]),
-                ..PodSpec::default()
+                    ..PodTemplateSpec::default()
+                },
+                ..JobSpec::default()
             }),
-            ..Pod::default()
+            ..Job::default()
         }).await?;
 
         Ok(())
