@@ -1,5 +1,5 @@
 use std::collections::{HashSet};
-use color_eyre::eyre::bail;
+use color_eyre::eyre::{bail, eyre};
 
 use color_eyre::Result;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -166,9 +166,9 @@ impl Controller {
                 },
                 spec: Some(
                     PersistentVolumeSpec {
-                        storage_class_name:
-                        Some(storage_class_name), ..
-                    }), ..
+                        storage_class_name: Some(storage_class_name), ..
+                    }
+                ), ..
             } = &volume {
                 // Ignore any PVs not assigned to our storage class
                 if storage_class_name != STORAGE_CLASS_NAME {
@@ -188,7 +188,7 @@ impl Controller {
                     }
 
                     match Controller::get_node_hostname_from_node_affinity(&volume) {
-                        Ok(node_hostname) => {
+                        Some(node_hostname) => {
                             let nodes = Api::<Node>::all(self.client());
 
                             // Find the node name from the node hostname
@@ -198,7 +198,7 @@ impl Controller {
                                 ..ListParams::default()
                             }).await?;
 
-                            if let [Node { metadata: ObjectMeta { name: Some(node_name), .. }, .. }] = volume_nodes.items.as_slice() {
+                            if let Some(node_name) = &volume_nodes.items.get(0).and_then(|i| i.metadata.name) {
                                 println!("Deploying volume deletion job on Node {}", node_name);
                                 self.run_provisioner_job("delete-volume", node_name, &["delete", volume.name_any().as_str()], ProvisionerJobType::Delete(DeleteJobArgs {
                                     target_pv_uid: uid.to_owned(),
@@ -209,8 +209,8 @@ impl Controller {
 
                             continue;
                         }
-                        Err(e) => {
-                            eprintln!("Failed to extract node hostname from nodeAffinity: {}", e);
+                        None => {
+                            eprintln!("PV {} should be deleted but does not have NodeAffinity set, don't know what Node to schedule the helper job on", volume.name_any())
                         }
                     }
                 }
@@ -225,34 +225,21 @@ impl Controller {
     }
 
     /// Tries to extract the Node hostname from a [PersistentVolume] by looking at the `nodeAffinity` field.
-    fn get_node_hostname_from_node_affinity(volume: &PersistentVolume) -> Result<String> {
-        if let Some(
-            PersistentVolumeSpec {
-                node_affinity: Some(
-                    VolumeNodeAffinity {
-                        required: Some(
-                            NodeSelector {
-                                node_selector_terms, ..
-                            }, ..
-                        )
-                    }, ..
-                ), ..
-            }
-        ) = &volume.spec {
-            if let [NodeSelectorTerm {
-                match_expressions: Some(node_selector_requirements), ..
-            }] = node_selector_terms.as_slice() {
-                for node_selector_requirement in node_selector_requirements.iter().filter(|r| r.key == NODE_HOSTNAME_KEY) {
-                    if let NodeSelectorRequirement { values: Some(hostname_values), .. } = node_selector_requirement {
-                        if let [node_hostname] = hostname_values.as_slice() {
-                            return Ok(node_hostname.clone());
-                        }
-                    }
-                }
+    fn get_node_hostname_from_node_affinity(volume: &PersistentVolume) -> Option<String> {
+        let node_selector_requirements = volume
+            .spec.as_ref()?
+            .node_affinity.as_ref()?
+            .required.as_ref()?
+            .node_selector_terms.get(0)?
+            .match_expressions.as_ref()?;
+
+        for node_selector_requirement in node_selector_requirements.iter().filter(|r| r.key == NODE_HOSTNAME_KEY) {
+            if let [node_hostname] = node_selector_requirement.values.as_ref()?.as_slice() {
+                return Some(node_hostname.to_owned());
             }
         }
 
-        bail!("PV {} should be deleted but does not have NodeAffinity set, don't know what Node to schedule the helper job on", volume.name_any())
+        None
     }
 
     /// Makes sure the StorageClass named [STORAGE_CLASS_NAME] exists in the cluster
