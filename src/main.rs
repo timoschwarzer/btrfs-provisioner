@@ -10,6 +10,8 @@ pub mod provisioner;
 pub mod controller;
 pub mod quantity_parser;
 pub mod config;
+pub mod btrfs_volume_metadata;
+pub mod btrfs_wrapper;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -20,13 +22,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Provision(ProvisionArgs)
+    Provision(ProvisionArgs),
+    Delete(DeleteArgs)
 }
 
 #[derive(Args)]
 struct ProvisionArgs {
     pvc_namespace: String,
     pvc_name: String,
+
+    #[clap(env = "NODE_NAME", help = "The name of the Node the provisioner runs on")]
+    node_name: String,
+}
+
+#[derive(Args)]
+struct DeleteArgs {
+    pv_name: String,
 
     #[clap(env = "NODE_NAME", help = "The name of the Node the provisioner runs on")]
     node_name: String,
@@ -49,6 +60,12 @@ async fn main() -> Result<()> {
                         args.pvc_namespace.as_str(),
                         args.pvc_name.as_str(),
                     )
+                    .await
+            }
+            Command::Delete(args) => {
+                Provisioner::create(args.node_name.to_owned())
+                    .await?
+                    .delete_persistent_volume_by_name(args.pv_name.as_str())
                     .await
             }
         }

@@ -1,20 +1,21 @@
 use std::collections::{BTreeMap};
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
 
 use color_eyre::eyre::{bail, eyre};
 use color_eyre::Result;
 use k8s_openapi::api::core::v1::{HostPathVolumeSource, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeSpec, ResourceRequirements, VolumeNodeAffinity};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta};
 use kube::{Api, Client, Config, Resource, ResourceExt};
-use kube::api::PostParams;
+use kube::api::{Patch, PatchParams, PostParams};
 use kube::api::entry::Entry;
 use mkdirp::mkdirp;
 use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
 
 use crate::config::*;
-use crate::ext::ProvisionerResourceExt;
+use crate::btrfs_volume_metadata::BtrfsVolumeMetadata;
+use crate::btrfs_wrapper::BtrfsWrapper;
+use crate::ext::{PathBufExt, ProvisionerResourceExt};
 use crate::quantity_parser::QuantityParser;
 
 pub struct Provisioner {
@@ -36,10 +37,7 @@ impl Provisioner {
     }
 
     pub async fn provision_persistent_volume_by_claim_name(&self, claim_namespace: &str, claim_name: &str) -> Result<()> {
-        let client = self.client();
-
-        let persistent_volume_claims = Api::<PersistentVolumeClaim>::namespaced(client.clone(), claim_namespace);
-
+        let persistent_volume_claims = Api::<PersistentVolumeClaim>::namespaced(self.client(), claim_namespace);
         let claim = persistent_volume_claims.get(claim_name).await?;
         self.provision_persistent_volume(&claim).await
     }
@@ -68,28 +66,28 @@ impl Provisioner {
             println!("Provisioning claim {}", claim.full_name());
             let pv_name = self.generate_pv_name_for_claim(claim).await?;
 
-            let volume_path: PathBuf = [VOLUMES_DIR, &pv_name].iter().collect();
-            let volume_host_path = Provisioner::get_host_path(&[VOLUMES_DIR, &pv_name])?;
-            let volume_path_str = volume_path.to_str().ok_or_else(|| eyre!("Failed to convert path to string"))?;
+            let btrfs_wrapper = BtrfsWrapper::new();
+            let btrfs_volume_metadata = BtrfsVolumeMetadata::from_pv_name(&pv_name)?;
+            let volume_path_str = btrfs_volume_metadata.path.as_str()?;
 
             if !Provisioner::get_host_path(&[VOLUMES_DIR])?.exists() {
                 bail!("The root volumes directory at {} does not exist. Please create it or mount a btrfs filesystem yourself.", VOLUMES_DIR);
             }
 
             println!("Creating btrfs subvolume at {}", volume_path_str);
-            if volume_host_path.exists() {
+            if btrfs_volume_metadata.host_path.exists() {
                 bail!("Cannot create btrfs subvolume, file/directory exists!");
             }
-            self.run_btrfs_command_on_host(&["subvolume", "create", volume_path_str])?;
+            btrfs_wrapper.subvolume_create(volume_path_str)?;
 
             println!("Enabling Quota on {}", volume_path_str);
-            self.run_btrfs_command_on_host(&["quota", "enable", volume_path_str])?;
+            btrfs_wrapper.quota_enable(volume_path_str)?;
 
             println!("Setting Quota limit on {} to {} bytes", volume_path_str, storage_request_bytes);
-            self.run_btrfs_command_on_host(&["qgroup", "limit", storage_request_bytes.to_string().as_str(), volume_path_str])?;
+            btrfs_wrapper.qgroup_limit(storage_request_bytes as u64, volume_path_str)?;
 
             println!("Triggering subvolume rescan");
-            self.run_btrfs_command_on_host(&["quota", "rescan", volume_path_str])?;
+            btrfs_wrapper.quota_rescan_wait(volume_path_str)?;
 
             println!("Creating PersistentVolume {}", pv_name);
             let mut annotations: BTreeMap<String, String> = BTreeMap::new();
@@ -137,6 +135,95 @@ impl Provisioner {
         Ok(())
     }
 
+    pub async fn delete_persistent_volume_by_name(&self, volume_name: &str) -> Result<()> {
+        let persistent_volumes = Api::<PersistentVolume>::all(self.client());
+        let volume = persistent_volumes.get(volume_name).await?;
+        self.delete_persistent_volume(&volume).await
+    }
+
+    pub async fn delete_persistent_volume(&self, volume: &PersistentVolume) -> Result<()> {
+        let persistent_volumes = Api::<PersistentVolume>::all(self.client());
+
+        if let PersistentVolume {
+            metadata: ObjectMeta {
+                finalizers: Some(finalizers),
+                ..
+            },
+            spec: Some(
+                PersistentVolumeSpec {
+                    storage_class_name: Some(
+                        storage_class_name
+                    ), ..
+                }
+            ), ..
+        } = &volume {
+            if storage_class_name != STORAGE_CLASS_NAME {
+                bail!("StorageClass name of {} does not match provisioner storage class name", volume.name_any());
+            }
+
+            let finalizer_index = finalizers
+                .iter()
+                .position(|f| f == FINALIZER_NAME)
+                .ok_or_else(|| eyre!("Finalizer {} not present on volume", FINALIZER_NAME))?;
+
+            println!("Deleting PersistentVolume {}", volume.name_any());
+
+            let btrfs_volume_metadata = BtrfsVolumeMetadata::from_pv_name(&volume.name_any())?;
+            let volume_path_str = btrfs_volume_metadata.path.as_str()?;
+
+            if !btrfs_volume_metadata.host_path.exists() {
+                bail!("Volume {} does not exist", volume_path_str);
+            }
+
+            let btrfs_wrapper = BtrfsWrapper::new();
+
+            match btrfs_wrapper.get_qgroup(volume_path_str) {
+                Ok(qgroup) => {
+                    println!("Destroying qgroup {}", qgroup);
+                    btrfs_wrapper.qgroup_destroy(&qgroup, volume_path_str)?;
+                }
+                Err(e) => {
+                    println!("Could not detect a qgroup for volume {}: {}", volume_path_str, e)
+                }
+            }
+
+            println!("Deleting subvolume {}", volume_path_str);
+            btrfs_wrapper.subvolume_delete(volume_path_str)?;
+
+            println!("Removing finalizer");
+            let finalizer_path = format!("/metadata/finalizers/{}", finalizer_index);
+
+            persistent_volumes.patch(
+                &*volume.name_any(),
+                &PatchParams::default(),
+                &Patch::<json_patch::Patch>::Json(json_patch::from_value(serde_json::json!([
+                    {
+                        "op": "remove",
+                        "path": finalizer_path
+                    }
+                ]))?),
+            ).await?;
+
+            Ok(())
+        } else {
+            bail!("StorageClass name is empty");
+        }
+    }
+
+    pub fn get_host_path(path: &[&str]) -> Result<PathBuf> {
+        let mut path_buf = PathBuf::new();
+
+        if let Ok(path) = std::env::var(HOST_FS_ENV_NAME) {
+            path_buf.push(path);
+        }
+
+        for part in path {
+            path_buf.push(part.trim_start_matches('/'));
+        }
+
+        Ok(path_buf)
+    }
+
     fn client(&self) -> Client {
         self.client.clone()
     }
@@ -166,54 +253,5 @@ impl Provisioner {
             Err(e) => panic!("Error while creating volume directory at {}: {}", VOLUMES_DIR, e),
             Ok(_) => Ok(())
         }
-    }
-
-    fn run_btrfs_command_on_host(&self, args: &[&str]) -> Result<Output> {
-        fn run_command(command: &mut Command, args: &[&str]) -> Result<Output> {
-            println!("Running: {:?}", command);
-
-            let output = &command
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .output()?;
-
-            if !&output.status.success() {
-                bail!("`btrfs {}` failed: {}", &args.join(" "), &output.status);
-            }
-
-            Ok(output.clone())
-        }
-
-        match std::env::var(HOST_FS_ENV_NAME) {
-            Ok(path) => {
-                run_command(
-                    Command::new("chroot")
-                        .args(vec![path.as_str(), "btrfs"])
-                        .args(args),
-                    args,
-                )
-            }
-            Err(_) => {
-                run_command(
-                    Command::new("btrfs")
-                        .args(args),
-                    args,
-                )
-            }
-        }
-    }
-
-    fn get_host_path(path: &[&str]) -> Result<PathBuf> {
-        let mut path_buf = PathBuf::new();
-
-        if let Ok(path) = std::env::var(HOST_FS_ENV_NAME) {
-            path_buf.push(path);
-        }
-
-        for part in path {
-            path_buf.push(part.trim_start_matches('/'));
-        }
-
-        Ok(path_buf)
     }
 }

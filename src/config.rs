@@ -9,3 +9,9 @@ pub const NODE_HOSTNAME_KEY: &str = "kubernetes.io/hostname";
 pub const IMAGE: &str = "ghcr.io/timoschwarzer/btrfs-provisioner";
 pub const SERVICE_ACCOUNT_NAME: &str = "btrfs-provisioner-service-account";
 pub const HOST_FS_ENV_NAME: &str = "HOST_FS";
+
+// Job labeling
+pub const JOB_TYPE_LABEL: &str = "btrfs-provisioner.timo.schwarzer.dev/job-type";
+pub const JOB_TYPE_PROVISION_VALUE: &str = "provision";
+pub const JOB_TYPE_DELETE_VALUE: &str = "delete";
+pub const JOB_TARGET_UID_LABEL: &str = "btrfs-provisioner.timo.schwarzer.dev/target-uid";

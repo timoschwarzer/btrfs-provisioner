@@ -1,19 +1,22 @@
-use std::collections::HashSet;
+use std::collections::{HashSet};
+use color_eyre::eyre::bail;
 
 use color_eyre::Result;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
-use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount};
+use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, Node, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount, VolumeNodeAffinity};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client, Config, ResourceExt};
 use kube::api::{ListParams, PostParams};
 use kube::runtime::{reflector, watcher};
 use kube::runtime::watcher::Event;
-use mkdirp::mkdirp;
 
 use crate::config::*;
+use crate::controller::provisioner_job_type::{DeleteJobArgs, ProvisionerJobType, ProvisionJobArgs};
 use crate::ext::ProvisionerResourceExt;
+
+pub mod provisioner_job_type;
 
 enum WatchedResource {
     Pv(Event<PersistentVolume>),
@@ -41,8 +44,6 @@ impl Controller {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        Controller::prepare_directories()?;
-
         self.ensure_storage_class_exists().await?;
 
         println!("Provisioner started.");
@@ -113,7 +114,9 @@ impl Controller {
                             let node_name = annotations.get(NODE_ANNOTATION_NAME).unwrap();
 
                             println!("Deploying volume provisioning job on Node {}", node_name);
-                            self.deploy_provisioner_job("provision-volume", node_name, &["provision", claim_namespace, claim_name]).await?;
+                            self.run_provisioner_job("provision-volume", node_name, &["provision", claim_namespace, claim_name], ProvisionerJobType::Provision(ProvisionJobArgs {
+                                target_pvc_uid: uid.to_owned(),
+                            })).await.unwrap_or_else(|e| eprintln!("{}", e));
                         }
                     }
                     "Bound" => {
@@ -135,22 +138,58 @@ impl Controller {
 
     async fn process_pv_event(&mut self, event: Event<PersistentVolume>) -> Result<()> {
         for volume in event.into_iter_applied() {
-            if let PersistentVolume { spec: Some(PersistentVolumeSpec { storage_class_name: Some(storage_class_name), .. }), .. } = &volume {
+            if let PersistentVolume {
+                metadata: ObjectMeta {
+                    uid: Some(uid), ..
+                },
+                spec: Some(
+                    PersistentVolumeSpec {
+                        storage_class_name:
+                        Some(storage_class_name), ..
+                    }), ..
+            } = &volume {
                 if storage_class_name != STORAGE_CLASS_NAME {
                     // Ignore any PVCs not assigned to our storage class
                     continue;
                 }
 
                 // Delete requested volumes
-                if let ObjectMeta { deletion_timestamp: Some(_), finalizers: Some(finalizers), .. } = volume.metadata {
-                    if !finalizers.iter().any(|finalizer| finalizer == FINALIZER_NAME) {
+                if let PersistentVolume {
+                    metadata: ObjectMeta {
+                        deletion_timestamp: Some(_),
+                        finalizers: Some(ref finalizers), ..
+                    }, ..
+                } = volume {
+                    if !finalizers.iter().any(|f| f == FINALIZER_NAME) {
                         continue;
                     }
 
-                    // TODO: Run helper pod to delete volume
-                    // TODO: Remove finalizer in helper pod
 
-                    continue;
+                    match Controller::get_node_hostname_from_node_affinity(&volume) {
+                        Ok(node_hostname) => {
+                            let nodes = Api::<Node>::all(self.client());
+
+                            let volume_nodes = nodes.list(&ListParams {
+                                label_selector: Some(format!("{}={}", NODE_HOSTNAME_KEY, node_hostname)),
+                                limit: Some(1),
+                                ..ListParams::default()
+                            }).await?;
+
+                            if let [Node { metadata: ObjectMeta { name: Some(node_name), .. }, .. }] = volume_nodes.items.as_slice() {
+                                println!("Deploying volume deletion job on Node {}", node_name);
+                                self.run_provisioner_job("delete-volume", node_name, &["delete", volume.name_any().as_str()], ProvisionerJobType::Delete(DeleteJobArgs {
+                                    target_pv_uid: uid.to_owned(),
+                                })).await.unwrap_or_else(|e| eprintln!("{}", e));
+                            } else {
+                                eprintln!("Did not find node with {}={}", NODE_HOSTNAME_KEY, node_hostname)
+                            }
+
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("{}", e);
+                        }
+                    }
                 }
 
                 if let Some(uid) = volume.uid() {
@@ -162,11 +201,34 @@ impl Controller {
         Ok(())
     }
 
-    fn prepare_directories() -> Result<()> {
-        match mkdirp(VOLUMES_DIR) {
-            Err(e) => panic!("Error while creating volume directory at {}: {}", VOLUMES_DIR, e),
-            Ok(_) => Ok(())
+    fn get_node_hostname_from_node_affinity(volume: &PersistentVolume) -> Result<String> {
+        if let Some(
+            PersistentVolumeSpec {
+                node_affinity: Some(
+                    VolumeNodeAffinity {
+                        required: Some(
+                            NodeSelector {
+                                node_selector_terms, ..
+                            }, ..
+                        )
+                    }, ..
+                ), ..
+            }
+        ) = &volume.spec {
+            if let [NodeSelectorTerm {
+                match_expressions: Some(node_selector_requirements), ..
+            }] = node_selector_terms.as_slice() {
+                for node_selector_requirement in node_selector_requirements.iter().filter(|r| r.key == NODE_HOSTNAME_KEY) {
+                    if let NodeSelectorRequirement { values: Some(hostname_values), .. } = node_selector_requirement {
+                        if let [node_hostname] = hostname_values.as_slice() {
+                            return Ok(node_hostname.clone());
+                        }
+                    }
+                }
+            }
         }
+
+        bail!("PV {} should be deleted but does not have NodeAffinity set, don't know what Node to schedule the helper job on", volume.name_any())
     }
 
     async fn ensure_storage_class_exists(&self) -> Result<()> {
@@ -195,12 +257,21 @@ impl Controller {
         Ok(())
     }
 
-    async fn deploy_provisioner_job(&self, name: &str, node_name: &str, args: &[&str]) -> Result<()> {
+    async fn run_provisioner_job(&self, name: &str, node_name: &str, args: &[&str], job_type: ProvisionerJobType) -> Result<()> {
         let jobs = Api::<Job>::namespaced(self.client(), NAMESPACE);
+
+        if let [existing_lob] = jobs.list(&ListParams {
+            label_selector: Some(job_type.to_label_selector()),
+            limit: Some(1),
+            ..ListParams::default()
+        }).await?.items.as_slice() {
+            bail!("Job already exists for this action: {}", existing_lob.full_name());
+        }
 
         jobs.create(&PostParams::default(), &Job {
             metadata: ObjectMeta {
                 generate_name: Some(name.to_owned() + "-"),
+                labels: Some(job_type.to_labels()),
                 ..ObjectMeta::default()
             },
             spec: Some(JobSpec {
