@@ -27,4 +27,11 @@ This is a (work in progress) volume provisioner for Kubernetes leveraging the BT
 
 ### Installation
 
-soon™
+There are only plain Kubernetes manifests yet. A Helm chart should come soon when the provisioner reaches a stable state.
+
+To deploy and test the BTRFS provisioner in your cluster, deploy the manifests in the `deploy` directory:
+
+```shell
+kubectl apply -f deploy/meta.yaml
+kubectl apply -f deploy/controller.yaml
+```

@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btrfs-provisioner
+  namespace: btrfs-provisioner
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: btrfs-provisioner-controller
+  template:
+    metadata:
+      labels:
+        app: btrfs-provisioner-controller
+    spec:
+      serviceAccountName: btrfs-provisioner-service-account
+      containers:
+      - name: controller
+        imagePullPolicy: Always
+        image: ghcr.io/timoschwarzer/btrfs-provisioner:main
+        env:
+        - name: IMAGE
+          value: ghcr.io/timoschwarzer/btrfs-provisioner:main
