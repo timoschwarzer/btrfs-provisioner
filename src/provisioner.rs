@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use color_eyre::eyre::{bail, eyre};
 use color_eyre::Result;
-use k8s_openapi::api::core::v1::{HostPathVolumeSource, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeSpec, ResourceRequirements, VolumeNodeAffinity};
+use k8s_openapi::api::core::v1::{LocalVolumeSource, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeSpec, ResourceRequirements, VolumeNodeAffinity};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta};
 use kube::{Api, Client, Config, Resource, ResourceExt};
 use kube::api::{Patch, PatchParams, PostParams};
@@ -110,9 +110,9 @@ impl Provisioner {
                     ..Default::default()
                 },
                 spec: Some(PersistentVolumeSpec {
-                    host_path: Some(HostPathVolumeSource {
+                    local: Some(LocalVolumeSource {
                         path: volume_path_str.into(),
-                        ..Default::default()
+                        ..LocalVolumeSource::default()
                     }),
                     claim_ref: Some(claim.object_ref(&())),
                     access_modes: Some(vec![String::from("ReadWriteOnce")]),
