@@ -4,7 +4,7 @@ use color_eyre::eyre::bail;
 use color_eyre::Result;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
-use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, Node, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount, VolumeNodeAffinity};
+use k8s_openapi::api::core::v1::{Container, EnvFromSource, EnvVar, EnvVarSource, HostPathVolumeSource, Node, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount, VolumeNodeAffinity};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client, Config, ResourceExt};
@@ -291,7 +291,7 @@ impl Controller {
     /// - `args` - CLI arguments for the btrfs-provisioner binary
     /// - `job_type` - A [JobType] to use for finding existing Jobs
     async fn run_provisioner_job(&self, name: &str, node_name: &str, args: &[&str], job_type: ProvisionerJobType) -> Result<()> {
-        let jobs = Api::<Job>::namespaced(self.client(), NAMESPACE);
+        let jobs = Api::<Job>::namespaced(self.client(), NAMESPACE.as_str());
 
         // Cancel if there already is a job matching job_type's labels
         if let [existing_lob] = jobs.list(&ListParams {
@@ -318,7 +318,7 @@ impl Controller {
                         service_account_name: Some(SERVICE_ACCOUNT_NAME.into()),
                         containers: vec![Container {
                             name: "provisioner".into(),
-                            image: Some(IMAGE.into()),
+                            image: Some(IMAGE.to_owned()),
                             image_pull_policy: Some("IfNotPresent".into()),
                             args: Some(args.iter().map(|s| String::from(*s)).collect()),
                             env: Some(vec![
@@ -336,6 +336,11 @@ impl Controller {
                                         }),
                                         ..EnvVarSource::default()
                                     }),
+                                    ..EnvVar::default()
+                                },
+                                EnvVar {
+                                    name: "VOLUMES_DIR".into(),
+                                    value: Some(VOLUMES_DIR.to_owned()),
                                     ..EnvVar::default()
                                 },
                             ]),

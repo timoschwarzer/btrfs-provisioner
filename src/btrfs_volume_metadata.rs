@@ -13,7 +13,7 @@ pub struct BtrfsVolumeMetadata {
 impl BtrfsVolumeMetadata {
     /// Return a BtrfsVolumeMetadata derived from a PV name
     pub fn from_pv_name(pv_name: &str) -> Result<BtrfsVolumeMetadata> {
-        let path_parts = vec![VOLUMES_DIR, pv_name];
+        let path_parts = vec![VOLUMES_DIR.as_str(), pv_name];
 
         let path: PathBuf = path_parts.iter().collect();
         let host_path = Provisioner::get_host_path(&path_parts)?;

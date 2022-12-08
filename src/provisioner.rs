@@ -78,8 +78,8 @@ impl Provisioner {
             let btrfs_volume_metadata = BtrfsVolumeMetadata::from_pv_name(&pv_name)?;
             let volume_path_str = btrfs_volume_metadata.path.as_str()?;
 
-            if !Provisioner::get_host_path(&[VOLUMES_DIR])?.exists() {
-                bail!("The root volumes directory at {} does not exist. Please create it or mount a btrfs filesystem yourself.", VOLUMES_DIR);
+            if !Provisioner::get_host_path(&[VOLUMES_DIR.as_str()])?.exists() {
+                bail!("The root volumes directory at {} does not exist. Please create it or mount a btrfs filesystem yourself.", VOLUMES_DIR.as_str());
             }
 
             println!("Creating btrfs subvolume at {}", volume_path_str);
@@ -263,8 +263,8 @@ impl Provisioner {
 
     /// Makes sure [VOLUMES_DIR] exists
     fn prepare_directories() -> Result<()> {
-        match mkdirp(VOLUMES_DIR) {
-            Err(e) => panic!("Error while creating volume directory at {}: {}", VOLUMES_DIR, e),
+        match mkdirp(VOLUMES_DIR.as_str()) {
+            Err(e) => panic!("Error while creating volume directory at {}: {}", VOLUMES_DIR.as_str(), e),
             Ok(_) => Ok(())
         }
     }
