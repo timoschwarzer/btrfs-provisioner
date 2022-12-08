@@ -47,6 +47,7 @@ impl BtrfsWrapper {
         self.run_btrfs_command(&["qgroup", "destroy", qgroup, path])
     }
 
+    /// Returns the qgroup of a BTRFS subvolume located at `path`.
     pub fn get_qgroup(&self, path: &str) -> Result<String> {
         let output = String::from_utf8(self.qgroup_show_for(path)?.stdout)?;
 
@@ -70,6 +71,7 @@ impl BtrfsWrapper {
         self.run_btrfs_command(&["qgroup", "show", "-pcref", path])
     }
 
+    /// Runs a BTRFS command after eventually `chroot`ing into the host filesystem
     fn run_btrfs_command(&self, args: &[&str]) -> Result<Output> {
         fn run_command(command: &mut Command) -> Result<Output> {
             println!("Running: {:?}", command);

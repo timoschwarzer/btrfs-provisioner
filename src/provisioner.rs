@@ -19,11 +19,17 @@ use crate::ext::{PathBufExt, ProvisionerResourceExt};
 use crate::quantity_parser::QuantityParser;
 
 pub struct Provisioner {
+    /// The Kubernetes client to use, created in [Provisioner::create]
     client: Client,
+    /// The name of the Node this Provisioner runs on
     node_name: String,
 }
 
 impl Provisioner {
+    /// Creates and returns a new [Provisioner].
+    ///
+    /// This method first tries to get the Kubernetes client credentials from ~/.kube/config and
+    /// tries the in-cluster service account if it doesn't find any.
     pub async fn create(node_name: String) -> Result<Self> {
         let client = Client::try_default()
             .await
@@ -36,12 +42,14 @@ impl Provisioner {
         })
     }
 
+    /// Provisions a PV by a PVC name
     pub async fn provision_persistent_volume_by_claim_name(&self, claim_namespace: &str, claim_name: &str) -> Result<()> {
         let persistent_volume_claims = Api::<PersistentVolumeClaim>::namespaced(self.client(), claim_namespace);
         let claim = persistent_volume_claims.get(claim_name).await?;
         self.provision_persistent_volume(&claim).await
     }
 
+    /// Provisions a PV by a PVC
     pub async fn provision_persistent_volume(&self, claim: &PersistentVolumeClaim) -> Result<()> {
         Provisioner::prepare_directories()?;
         let client = self.client();
@@ -135,12 +143,14 @@ impl Provisioner {
         Ok(())
     }
 
+    /// Deletes a PV by name
     pub async fn delete_persistent_volume_by_name(&self, volume_name: &str) -> Result<()> {
         let persistent_volumes = Api::<PersistentVolume>::all(self.client());
         let volume = persistent_volumes.get(volume_name).await?;
         self.delete_persistent_volume(&volume).await
     }
 
+    /// Deletes a PV
     pub async fn delete_persistent_volume(&self, volume: &PersistentVolume) -> Result<()> {
         let persistent_volumes = Api::<PersistentVolume>::all(self.client());
 
@@ -210,6 +220,7 @@ impl Provisioner {
         }
     }
 
+    /// Returns the absolute path to an absolute path in the host filesystem
     pub fn get_host_path(path: &[&str]) -> Result<PathBuf> {
         let mut path_buf = PathBuf::new();
 
@@ -224,10 +235,12 @@ impl Provisioner {
         Ok(path_buf)
     }
 
+    /// Returns a copy of the Kubernetes client
     fn client(&self) -> Client {
         self.client.clone()
     }
 
+    /// Generates a unique PV name for a PVC
     async fn generate_pv_name_for_claim(&self, claim: &PersistentVolumeClaim) -> Result<String> {
         let client = self.client();
 
@@ -248,6 +261,7 @@ impl Provisioner {
         }
     }
 
+    /// Makes sure [VOLUMES_DIR] exists
     fn prepare_directories() -> Result<()> {
         match mkdirp(VOLUMES_DIR) {
             Err(e) => panic!("Error while creating volume directory at {}: {}", VOLUMES_DIR, e),

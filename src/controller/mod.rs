@@ -23,13 +23,23 @@ enum WatchedResource {
     Pvc(Event<PersistentVolumeClaim>),
 }
 
+/// The [Controller] part watches cluster resources and reconciles any state
+/// related to btrfs-provisioner. For example, it deploys Jobs to provision
+/// new PVCs and delete PVs on demand.
 pub struct Controller {
+    /// The Kubernetes client to use, created in [Provisioner::create]
     client: Client,
+    /// Collection of UIDs of all active PVCs managed by btrfs-provisioner
     active_pvc_uids: HashSet<String>,
+    /// Collection of UIDs of all active PVs managed by btrfs-provisioner
     active_pv_uids: HashSet<String>,
 }
 
 impl Controller {
+    /// Creates and returns a new [Controller].
+    ///
+    /// This method first tries to get the Kubernetes client credentials from ~/.kube/config and
+    /// tries the in-cluster service account if it doesn't find any.
     pub async fn create() -> Result<Self> {
         let client = Client::try_default()
             .await
@@ -43,21 +53,26 @@ impl Controller {
         })
     }
 
+    /// Starts the Controller
     pub async fn run(&mut self) -> Result<()> {
         self.ensure_storage_class_exists().await?;
 
-        println!("Provisioner started.");
+        println!("Controller started.");
 
-        self.watch_persistent_volume_claims().await?;
+        self.watch_resources().await?;
 
         Ok(())
     }
 
+    /// Returns a copy of the Kubernetes client
     fn client(&self) -> Client {
         self.client.clone()
     }
 
-    async fn watch_persistent_volume_claims(&mut self) -> Result<()> {
+    /// Watches related cluster resources and processes events
+    ///
+    /// This method only returns if an error occurs.
+    async fn watch_resources(&mut self) -> Result<()> {
         let client = self.client();
 
         let persistent_volume_claims = Api::<PersistentVolumeClaim>::all(client.clone());
@@ -74,6 +89,8 @@ impl Controller {
 
         tokio::pin!(stream);
 
+        // Redirect the events to their respective event handlers, depending on
+        // what resource the event is for
         while let Ok(Some(watched_resource)) = stream.try_next().await {
             match watched_resource {
                 WatchedResource::Pvc(pvc) => self.process_pvc_event(pvc).await?,
@@ -84,17 +101,19 @@ impl Controller {
         Ok(())
     }
 
+    /// Process updates to PVCs
     async fn process_pvc_event(&mut self, event: Event<PersistentVolumeClaim>) -> Result<()> {
         for claim in event.into_iter_applied() {
             if let PersistentVolumeClaim { spec: Some(PersistentVolumeClaimSpec { storage_class_name: Some(storage_class_name), .. }), status: Some(PersistentVolumeClaimStatus { phase: Some(phase), .. }), .. } = &claim {
+                // Ignore any PVCs not assigned to our storage class
                 if storage_class_name != STORAGE_CLASS_NAME {
-                    // Ignore any PVCs not assigned to our storage class
                     continue;
                 }
 
                 match phase.as_str() {
                     "Pending" => {
                         if let Some(uid) = &claim.uid() {
+                            // We've seen this PVC before, skip.
                             if self.active_pvc_uids.contains(uid) {
                                 continue;
                             }
@@ -125,6 +144,8 @@ impl Controller {
                                 continue;
                             }
 
+                            // This PVC is already bound so we have nothing to do
+                            self.active_pvc_uids.insert(uid.clone());
                             println!("Bound: {}", &claim.full_name());
                         }
                     }
@@ -136,6 +157,7 @@ impl Controller {
         Ok(())
     }
 
+    /// Process updates to PVs
     async fn process_pv_event(&mut self, event: Event<PersistentVolume>) -> Result<()> {
         for volume in event.into_iter_applied() {
             if let PersistentVolume {
@@ -148,8 +170,8 @@ impl Controller {
                         Some(storage_class_name), ..
                     }), ..
             } = &volume {
+                // Ignore any PVs not assigned to our storage class
                 if storage_class_name != STORAGE_CLASS_NAME {
-                    // Ignore any PVCs not assigned to our storage class
                     continue;
                 }
 
@@ -160,15 +182,16 @@ impl Controller {
                         finalizers: Some(ref finalizers), ..
                     }, ..
                 } = volume {
+                    // Skip volume if it doesn't have our finalizer anymore
                     if !finalizers.iter().any(|f| f == FINALIZER_NAME) {
                         continue;
                     }
-
 
                     match Controller::get_node_hostname_from_node_affinity(&volume) {
                         Ok(node_hostname) => {
                             let nodes = Api::<Node>::all(self.client());
 
+                            // Find the node name from the node hostname
                             let volume_nodes = nodes.list(&ListParams {
                                 label_selector: Some(format!("{}={}", NODE_HOSTNAME_KEY, node_hostname)),
                                 limit: Some(1),
@@ -187,7 +210,7 @@ impl Controller {
                             continue;
                         }
                         Err(e) => {
-                            eprintln!("{}", e);
+                            eprintln!("Failed to extract node hostname from nodeAffinity: {}", e);
                         }
                     }
                 }
@@ -201,6 +224,7 @@ impl Controller {
         Ok(())
     }
 
+    /// Tries to extract the Node hostname from a [PersistentVolume] by looking at the `nodeAffinity` field.
     fn get_node_hostname_from_node_affinity(volume: &PersistentVolume) -> Result<String> {
         if let Some(
             PersistentVolumeSpec {
@@ -231,6 +255,7 @@ impl Controller {
         bail!("PV {} should be deleted but does not have NodeAffinity set, don't know what Node to schedule the helper job on", volume.name_any())
     }
 
+    /// Makes sure the StorageClass named [STORAGE_CLASS_NAME] exists in the cluster
     async fn ensure_storage_class_exists(&self) -> Result<()> {
         let client = self.client();
 
@@ -257,9 +282,18 @@ impl Controller {
         Ok(())
     }
 
+    /// Runs a [Provisioner] job as a Kubernetes Job.
+    ///
+    /// # Arguments
+    ///
+    /// - `name` - The name of the Job. Will have random characters appended.
+    /// - `node_name` - The name of the Node the Job should schedule its Pod on
+    /// - `args` - CLI arguments for the btrfs-provisioner binary
+    /// - `job_type` - A [JobType] to use for finding existing Jobs
     async fn run_provisioner_job(&self, name: &str, node_name: &str, args: &[&str], job_type: ProvisionerJobType) -> Result<()> {
         let jobs = Api::<Job>::namespaced(self.client(), NAMESPACE);
 
+        // Cancel if there already is a job matching job_type's labels
         if let [existing_lob] = jobs.list(&ListParams {
             label_selector: Some(job_type.to_label_selector()),
             limit: Some(1),
@@ -268,6 +302,7 @@ impl Controller {
             bail!("Job already exists for this action: {}", existing_lob.full_name());
         }
 
+        // Deploy the Job...
         jobs.create(&PostParams::default(), &Job {
             metadata: ObjectMeta {
                 generate_name: Some(name.to_owned() + "-"),

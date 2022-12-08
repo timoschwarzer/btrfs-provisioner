@@ -4,6 +4,7 @@ use color_eyre::Result;
 use kube::ResourceExt;
 
 pub trait ProvisionerResourceExt: ResourceExt {
+    /// Returns the full name of the resource in the format `<namespace>/<name>`
     fn full_name(&self) -> String;
 }
 
