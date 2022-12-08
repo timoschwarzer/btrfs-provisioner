@@ -4,7 +4,7 @@ use color_eyre::eyre::bail;
 use color_eyre::Result;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
-use k8s_openapi::api::core::v1::{Container, EnvFromSource, EnvVar, EnvVarSource, HostPathVolumeSource, Node, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount, VolumeNodeAffinity};
+use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, Node, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount, VolumeNodeAffinity};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client, Config, ResourceExt};
