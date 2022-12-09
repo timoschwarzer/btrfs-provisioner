@@ -47,7 +47,7 @@ struct DeleteArgs {
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
-    println!("Running btrfs-provisioner built at {}", build_time_local!());
+    println!("Running btrfs-provisioner v{} built at {}", config::VERSION, build_time_local!());
 
     let cli = Cli::parse();
 

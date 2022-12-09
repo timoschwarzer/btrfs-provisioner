@@ -1,5 +1,6 @@
 use lazy_static::lazy_static;
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const STORAGE_CLASS_NAME: &str = "btrfs-provisioner";
 pub const PROVISIONED_BY_ANNOTATION_KEY: &str = "pv.kubernetes.io/provisioned-by";
 pub const PROVISIONER_NAME: &str = "timo.schwarzer.dev/btrfs-provisioner";
