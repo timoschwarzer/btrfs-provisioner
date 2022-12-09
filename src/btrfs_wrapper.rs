@@ -36,7 +36,7 @@ impl BtrfsWrapper {
     }
 
     pub fn quota_rescan_wait(&self, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["quota", "rescan", "--wait", path])
+        self.run_btrfs_command(&["quota", "rescan", "-w", path])
     }
 
     pub fn qgroup_limit(&self, bytes: u64, path: &str) -> Result<Output> {
