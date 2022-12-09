@@ -1,10 +1,10 @@
 use std::collections::{HashSet};
-use color_eyre::eyre::{bail, eyre};
+use color_eyre::eyre::{bail};
 
 use color_eyre::Result;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
-use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, Node, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount, VolumeNodeAffinity};
+use k8s_openapi::api::core::v1::{Container, EnvVar, EnvVarSource, HostPathVolumeSource, Node, ObjectFieldSelector, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimStatus, PersistentVolumeSpec, PodSpec, PodTemplateSpec, SecurityContext, Volume, VolumeMount};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{Api, Client, Config, ResourceExt};
@@ -198,7 +198,7 @@ impl Controller {
                                 ..ListParams::default()
                             }).await?;
 
-                            if let Some(node_name) = &volume_nodes.items.get(0).and_then(|i| i.metadata.name) {
+                            if let Some(node_name) = &volume_nodes.items.get(0).and_then(|i| i.metadata.name.as_ref()) {
                                 println!("Deploying volume deletion job on Node {}", node_name);
                                 self.run_provisioner_job("delete-volume", node_name, &["delete", volume.name_any().as_str()], ProvisionerJobType::Delete(DeleteJobArgs {
                                     target_pv_uid: uid.to_owned(),
@@ -226,20 +226,15 @@ impl Controller {
 
     /// Tries to extract the Node hostname from a [PersistentVolume] by looking at the `nodeAffinity` field.
     fn get_node_hostname_from_node_affinity(volume: &PersistentVolume) -> Option<String> {
-        let node_selector_requirements = volume
+        volume
             .spec.as_ref()?
             .node_affinity.as_ref()?
             .required.as_ref()?
             .node_selector_terms.get(0)?
-            .match_expressions.as_ref()?;
-
-        for node_selector_requirement in node_selector_requirements.iter().filter(|r| r.key == NODE_HOSTNAME_KEY) {
-            if let [node_hostname] = node_selector_requirement.values.as_ref()?.as_slice() {
-                return Some(node_hostname.to_owned());
-            }
-        }
-
-        None
+            .match_expressions.as_ref()?
+            .iter()
+            .filter(|r| r.key == NODE_HOSTNAME_KEY && r.operator == "In")
+            .find_map(|r| r.values.as_ref()?.get(0).cloned())
     }
 
     /// Makes sure the StorageClass named [STORAGE_CLASS_NAME] exists in the cluster
