@@ -325,6 +325,11 @@ impl Controller {
                                     value: Some(VOLUMES_DIR.to_owned()),
                                     ..EnvVar::default()
                                 },
+                                EnvVar {
+                                    name: "ARCHIVE_ON_DELETE".into(),
+                                    value: Some(if *ARCHIVE_ON_DELETE { "true" } else { "false" }.into()),
+                                    ..EnvVar::default()
+                                },
                             ]),
                             security_context: Some(SecurityContext {
                                 privileged: Some(true),

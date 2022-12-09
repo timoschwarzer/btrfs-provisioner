@@ -14,6 +14,7 @@ lazy_static! {
     pub static ref NAMESPACE: String = std::env::var("NAMESPACE").unwrap_or_else(|_| "btrfs-provisioner".into());
     pub static ref VOLUMES_DIR: String = std::env::var("VOLUMES_DIR").unwrap_or_else(|_| "/volumes".into());
     pub static ref IMAGE: String = std::env::var("IMAGE").unwrap_or_else(|_| "ghcr.io/timoschwarzer/btrfs-provisioner".into());
+    pub static ref ARCHIVE_ON_DELETE: bool = matches!(std::env::var("ARCHIVE_ON_DELETE").unwrap_or_else(|_| "false".into()).as_str(), "true" | "1");
 }
 
 // Job labeling

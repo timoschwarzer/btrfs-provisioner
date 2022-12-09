@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap};
 use std::path::PathBuf;
+use chrono::Utc;
 
 use color_eyre::eyre::{bail, eyre};
 use color_eyre::Result;
@@ -197,14 +198,25 @@ impl Provisioner {
                 }
             }
 
-            println!("Deleting subvolume {}", volume_path_str);
-            btrfs_wrapper.subvolume_delete(volume_path_str)?;
+            if *ARCHIVE_ON_DELETE {
+                println!("Archiving on PV deletion is enabled, archiving volume...");
+                let volume_dir_name = btrfs_volume_metadata.path.file_name().ok_or_else(|| eyre!("Could not determine volume directory name"))?;
+                let mut new_path = btrfs_volume_metadata.path.clone();
+                new_path.set_file_name(format!("_archive-{}-{}", Utc::now().timestamp(), volume_dir_name.to_str().unwrap()));
+                let new_path_str = new_path.to_str().unwrap();
+
+                println!("Moving from {} to {}", volume_path_str, new_path_str);
+                btrfs_wrapper.mv(volume_path_str, new_path_str)?;
+            } else {
+                println!("Deleting subvolume {}", volume_path_str);
+                btrfs_wrapper.subvolume_delete(volume_path_str)?;
+            }
 
             println!("Removing finalizer");
             let finalizer_path = format!("/metadata/finalizers/{}", finalizer_index);
 
             persistent_volumes.patch(
-                &*volume.name_any(),
+                &volume.name_any(),
                 &PatchParams::default(),
                 &Patch::<json_patch::Patch>::Json(json_patch::from_value(serde_json::json!([
                     {

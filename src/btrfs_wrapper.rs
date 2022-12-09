@@ -23,28 +23,32 @@ impl BtrfsWrapper {
         Self::default()
     }
 
+    pub fn mv(&self, source: &str, target: &str) -> Result<Output> {
+        self.run_command("mv", &[source, target])
+    }
+
     pub fn subvolume_create(&self, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["subvolume", "create", path])
+        self.run_command("btrfs", &["subvolume", "create", path])
     }
 
     pub fn subvolume_delete(&self, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["subvolume", "delete", "--commit-after", path])
+        self.run_command("btrfs", &["subvolume", "delete", "--commit-after", path])
     }
 
     pub fn quota_enable(&self, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["quota", "enable", path])
+        self.run_command("btrfs", &["quota", "enable", path])
     }
 
     pub fn quota_rescan_wait(&self, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["quota", "rescan", "-w", path])
+        self.run_command("btrfs", &["quota", "rescan", "-w", path])
     }
 
     pub fn qgroup_limit(&self, bytes: u64, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["qgroup", "limit", bytes.to_string().as_str(), path])
+        self.run_command("btrfs", &["qgroup", "limit", bytes.to_string().as_str(), path])
     }
 
     pub fn qgroup_destroy(&self, qgroup: &str, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["qgroup", "destroy", qgroup, path])
+        self.run_command("btrfs", &["qgroup", "destroy", qgroup, path])
     }
 
     /// Returns the qgroup of a BTRFS subvolume located at `path`.
@@ -68,34 +72,34 @@ impl BtrfsWrapper {
     }
 
     fn qgroup_show_for(&self, path: &str) -> Result<Output> {
-        self.run_btrfs_command(&["qgroup", "show", "-pcref", path])
+        self.run_command("btrfs", &["qgroup", "show", "-pcref", path])
     }
 
-    /// Runs a BTRFS command after eventually `chroot`ing into the host filesystem
-    fn run_btrfs_command(&self, args: &[&str]) -> Result<Output> {
-        fn run_command(command: &mut Command) -> Result<Output> {
+    /// Runs a command after eventually `chroot`ing into the host filesystem
+    fn run_command(&self, command: &str, args: &[&str]) -> Result<Output> {
+        fn run_prepared_command(command: &mut Command) -> Result<Output> {
             println!("Running: {:?}", command);
 
             let output = &command.output()?;
 
-            stdout().write_all(&*output.stdout)?;
-            stderr().write_all(&*output.stderr)?;
+            stdout().write_all(&output.stdout)?;
+            stderr().write_all(&output.stderr)?;
 
             Ok(output.clone())
         }
 
         if self.chroot_to_host {
             if let Ok(path) = std::env::var(HOST_FS_ENV_NAME) {
-                return run_command(
+                return run_prepared_command(
                     Command::new("chroot")
-                        .args(vec![path.as_str(), "btrfs"])
+                        .args(vec![path.as_str(), command])
                         .args(args),
                 )
             }
         }
 
-        let output = run_command(
-            Command::new("btrfs")
+        let output = run_prepared_command(
+            Command::new(command)
                 .args(args),
         )?;
 
