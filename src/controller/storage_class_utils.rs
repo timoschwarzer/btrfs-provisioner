@@ -24,6 +24,7 @@ impl StorageClassExt for StorageClass {
     }
 }
 
+/// Returns the [StorageClass] called `name`
 async fn get_storage_class_by_name(client: Client, name: &str) -> Result<Option<StorageClass>> {
     let storage_classes = Api::<StorageClass>::all(client);
 
@@ -80,6 +81,7 @@ impl StorageClassNodeAssignment {
     }
 }
 
+/// Returns [StorageClassNodeAssignment] for the StorageClass called `storage_class_name`
 pub async fn get_node_assigned_to_storage_class(client: Client, storage_class_name: &str) -> Result<Option<StorageClassNodeAssignment>> {
     let storage_class = get_storage_class_by_name(client, storage_class_name).await?;
 
@@ -87,7 +89,7 @@ pub async fn get_node_assigned_to_storage_class(client: Client, storage_class_na
         return Ok(
             storage_class
                 .get_controlling_node_name()
-                .map_or(None, |node_name| Some(StorageClassNodeAssignment::from_string(node_name)))
+                .map(|node_name| StorageClassNodeAssignment::from_string(node_name))
         );
     }
 
