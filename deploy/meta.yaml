@@ -15,8 +15,11 @@ metadata:
   name: btrfs-provisioner-role
 rules:
 - apiGroups: [ "" ]
-  resources: [ "nodes", "persistentvolumeclaims", "configmaps" ]
+  resources: [ "persistentvolumeclaims", "configmaps" ]
   verbs: [ "get", "list", "watch" ]
+- apiGroups: [ "" ]
+  resources: [ "nodes" ]
+  verbs: [ "get", "list", "watch", "patch" ]
 - apiGroups: [ "" ]
   resources: [ "endpoints", "persistentvolumes", "pods" ]
   verbs: [ "*" ]

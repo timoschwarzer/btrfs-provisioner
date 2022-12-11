@@ -11,9 +11,14 @@ pub struct DeleteJobArgs {
     pub target_pv_uid: String,
 }
 
+pub struct InitializeNodeJobArgs {
+    pub target_node_uid: String,
+}
+
 pub enum ProvisionerJobType {
     Provision(ProvisionJobArgs),
     Delete(DeleteJobArgs),
+    InitializeNode(InitializeNodeJobArgs),
 }
 
 impl ProvisionerJobType {
@@ -28,6 +33,9 @@ impl ProvisionerJobType {
             })),
             JOB_TYPE_DELETE_VALUE => Ok(ProvisionerJobType::Delete(DeleteJobArgs {
                 target_pv_uid: labels.get(JOB_TARGET_UID_LABEL).ok_or_else(|| eyre!("Required label {} missing for type={}", JOB_TARGET_UID_LABEL, JOB_TYPE_DELETE_VALUE))?.to_owned(),
+            })),
+            JOB_TYPE_INITIALIZE_NODE_VALUE => Ok(ProvisionerJobType::InitializeNode(InitializeNodeJobArgs {
+                target_node_uid: labels.get(JOB_TARGET_UID_LABEL).ok_or_else(|| eyre!("Required label {} missing for type={}", JOB_TARGET_UID_LABEL, JOB_TYPE_INITIALIZE_NODE_VALUE))?.to_owned(),
             })),
             other_job_type => bail!("Invalid job type: {}", other_job_type)
         }
@@ -44,6 +52,10 @@ impl ProvisionerJobType {
             ProvisionerJobType::Delete(args) => {
                 labels.insert(JOB_TYPE_LABEL.into(), JOB_TYPE_DELETE_VALUE.into());
                 labels.insert(JOB_TARGET_UID_LABEL.into(), args.target_pv_uid.to_owned());
+            }
+            ProvisionerJobType::InitializeNode(args) => {
+                labels.insert(JOB_TYPE_LABEL.into(), JOB_TYPE_DELETE_VALUE.into());
+                labels.insert(JOB_TARGET_UID_LABEL.into(), args.target_node_uid.to_owned());
             }
         }
 

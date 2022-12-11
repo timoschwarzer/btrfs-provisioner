@@ -1,5 +1,5 @@
-use std::collections::{HashSet};
-use color_eyre::eyre::{bail};
+use std::collections::{BTreeMap, HashSet};
+use color_eyre::eyre::{eyre};
 
 use color_eyre::Result;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -13,14 +13,22 @@ use kube::runtime::{reflector, watcher};
 use kube::runtime::watcher::Event;
 
 use crate::config::*;
-use crate::controller::provisioner_job_type::{DeleteJobArgs, ProvisionerJobType, ProvisionJobArgs};
+use crate::controller::provisioner_job_type::{DeleteJobArgs, InitializeNodeJobArgs, ProvisionerJobType, ProvisionJobArgs};
+use crate::controller::storage_class_utils::{get_node_assigned_to_storage_class, is_controlling_storage_class, StorageClassNodeAssignment};
 use crate::ext::ProvisionerResourceExt;
 
 pub mod provisioner_job_type;
+pub mod storage_class_utils;
 
 enum WatchedResource {
     Pv(Event<PersistentVolume>),
     Pvc(Event<PersistentVolumeClaim>),
+    Node(Event<Node>),
+}
+
+enum RunJobResult {
+    Deployed,
+    AlreadyExisting(Job),
 }
 
 /// The [Controller] part watches cluster resources and reconciles any state
@@ -55,7 +63,9 @@ impl Controller {
 
     /// Starts the Controller
     pub async fn run(&mut self) -> Result<()> {
-        self.ensure_storage_class_exists().await?;
+        if !*STORAGE_CLASS_PER_NODE {
+            todo!("Dynamic StorageClass is not supported yet (STORAGE_CLASS_PER_NODE=false)");
+        }
 
         println!("Controller started.");
 
@@ -73,19 +83,24 @@ impl Controller {
     ///
     /// This method only returns if an error occurs.
     async fn watch_resources(&mut self) -> Result<()> {
-        let client = self.client();
+        let persistent_volume_claims = Api::<PersistentVolumeClaim>::all(self.client());
+        let persistent_volumes = Api::<PersistentVolume>::all(self.client());
+        let nodes = Api::<Node>::all(self.client());
 
-        let persistent_volume_claims = Api::<PersistentVolumeClaim>::all(client.clone());
-        let persistent_volumes = Api::<PersistentVolume>::all(client.clone());
-
-        let (_pvc_reader, pvc_writer) = reflector::store();
-        let (_pv_reader, pv_writer) = reflector::store();
+        let (_, pvc_writer) = reflector::store();
+        let (_, pv_writer) = reflector::store();
+        let (_, node_writer) = reflector::store();
         let pvc_reflector = reflector(pvc_writer, watcher(persistent_volume_claims, ListParams::default()))
             .map_ok(WatchedResource::Pvc);
         let pv_reflector = reflector(pv_writer, watcher(persistent_volumes, ListParams::default()))
             .map_ok(WatchedResource::Pv);
+        let node_reflector = reflector(node_writer, watcher(nodes, ListParams {
+            label_selector: Some("!node-role.kubernetes.io/master".into()),
+            ..ListParams::default()
+        }))
+            .map_ok(WatchedResource::Node);
 
-        let stream = stream::select_all(vec![pvc_reflector.boxed(), pv_reflector.boxed()]);
+        let stream = stream::select_all(vec![pvc_reflector.boxed(), pv_reflector.boxed(), node_reflector.boxed()]);
 
         tokio::pin!(stream);
 
@@ -95,6 +110,7 @@ impl Controller {
             match watched_resource {
                 WatchedResource::Pvc(pvc) => self.process_pvc_event(pvc).await?,
                 WatchedResource::Pv(pv) => self.process_pv_event(pv).await?,
+                WatchedResource::Node(node) => self.process_node_event(node).await?,
             }
         };
 
@@ -105,8 +121,8 @@ impl Controller {
     async fn process_pvc_event(&mut self, event: Event<PersistentVolumeClaim>) -> Result<()> {
         for claim in event.into_iter_applied() {
             if let PersistentVolumeClaim { spec: Some(PersistentVolumeClaimSpec { storage_class_name: Some(storage_class_name), .. }), status: Some(PersistentVolumeClaimStatus { phase: Some(phase), .. }), .. } = &claim {
-                // Ignore any PVCs not assigned to our storage class
-                if storage_class_name != STORAGE_CLASS_NAME {
+                // Ignore any PVCs not controlled by one of our storage classes
+                if !is_controlling_storage_class(self.client(), storage_class_name).await? {
                     continue;
                 }
 
@@ -124,18 +140,23 @@ impl Controller {
                             let claim_namespace = &claim.namespace().unwrap();
                             let claim_name = &claim.name_any();
 
-                            let annotations = &claim.metadata.annotations.unwrap_or_default();
-                            if !&annotations.contains_key(NODE_ANNOTATION_NAME) {
-                                eprintln!("PVC does not have required annotation {}", NODE_ANNOTATION_NAME);
-                                continue;
-                            }
+                            let assigned_node = get_node_assigned_to_storage_class(self.client(), storage_class_name)
+                                .await?
+                                .ok_or_else(|| eyre!("No node assigned with StorageClass"))?;
 
-                            let node_name = annotations.get(NODE_ANNOTATION_NAME).unwrap();
-
-                            println!("Deploying volume provisioning job on Node {}", node_name);
-                            self.run_provisioner_job("provision-volume", node_name, &["provision", claim_namespace, claim_name], ProvisionerJobType::Provision(ProvisionJobArgs {
-                                target_pvc_uid: uid.to_owned(),
-                            })).await.unwrap_or_else(|e| eprintln!("{}", e));
+                            match assigned_node {
+                                StorageClassNodeAssignment::SingleNode { node_name } => {
+                                    println!("Deploying volume provisioning job on Node {}", node_name);
+                                    if let Err(e) = self.run_provisioner_job("provision-volume", &node_name, &["provision", claim_namespace, claim_name], ProvisionerJobType::Provision(ProvisionJobArgs {
+                                        target_pvc_uid: uid.to_owned(),
+                                    })).await {
+                                        eprintln!("{}", e);
+                                    }
+                                }
+                                StorageClassNodeAssignment::Dynamic => {
+                                    todo!("Dynamic StorageClass is not supported yet")
+                                }
+                            };
                         }
                     }
                     "Bound" => {
@@ -170,8 +191,8 @@ impl Controller {
                     }
                 ), ..
             } = &volume {
-                // Ignore any PVs not assigned to our storage class
-                if storage_class_name != STORAGE_CLASS_NAME {
+                // Ignore any PVs not controlled by one of our storage classes
+                if !is_controlling_storage_class(self.client(), storage_class_name).await? {
                     continue;
                 }
 
@@ -200,9 +221,11 @@ impl Controller {
 
                             if let Some(node_name) = &volume_nodes.items.get(0).and_then(|i| i.metadata.name.as_ref()) {
                                 println!("Deploying volume deletion job on Node {}", node_name);
-                                self.run_provisioner_job("delete-volume", node_name, &["delete", volume.name_any().as_str()], ProvisionerJobType::Delete(DeleteJobArgs {
+                                if let Err(e) = self.run_provisioner_job("delete-volume", node_name, &["delete", volume.name_any().as_str()], ProvisionerJobType::Delete(DeleteJobArgs {
                                     target_pv_uid: uid.to_owned(),
-                                })).await.unwrap_or_else(|e| eprintln!("{}", e));
+                                })).await {
+                                    eprintln!("{}", e);
+                                }
                             } else {
                                 eprintln!("Did not find node with {}={}", NODE_HOSTNAME_KEY, node_hostname)
                             }
@@ -224,6 +247,31 @@ impl Controller {
         Ok(())
     }
 
+    /// Process updates to Nodes
+    async fn process_node_event(&self, event: Event<Node>) -> Result<()> {
+        for node in event.into_iter_applied() {
+            if let Some(uid) = &node.metadata.uid {
+                let storage_classes = Api::<StorageClass>::all(self.client());
+
+                if let [existing_storage_class] = storage_classes.list(&ListParams {
+                    label_selector: Some(format!("{}={}", STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME, &node.name_any())),
+                    limit: Some(1),
+                    ..ListParams::default()
+                }).await?.items.as_slice() {
+                    println!("Node {} is associated with StorageClass {}", node.name_any(), existing_storage_class.name_any());
+                    continue;
+                }
+
+                println!("Initializing Node {}", node.name_any());
+                self.run_provisioner_job("initialize-node", &node.name_any(), &["initialize-node"], ProvisionerJobType::InitializeNode(InitializeNodeJobArgs {
+                    target_node_uid: uid.to_owned(),
+                })).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Tries to extract the Node hostname from a [PersistentVolume] by looking at the `nodeAffinity` field.
     fn get_node_hostname_from_node_affinity(volume: &PersistentVolume) -> Option<String> {
         volume
@@ -237,25 +285,29 @@ impl Controller {
             .find_map(|r| r.values.as_ref()?.get(0).cloned())
     }
 
-    /// Makes sure the StorageClass named [STORAGE_CLASS_NAME] exists in the cluster
-    async fn ensure_storage_class_exists(&self) -> Result<()> {
-        let client = self.client();
+    /// Makes sure the StorageClass named [DYNAMIC_STORAGE_CLASS_NAME] exists in the cluster
+    #[allow(dead_code, unreachable_code)]
+    async fn ensure_dynamic_storage_class_exists(&self) -> Result<()> {
+        todo!("Dynamic StorageClasses are not supported yet");
 
-        let storage_classes = Api::<StorageClass>::all(client);
+        let storage_classes = Api::<StorageClass>::all(self.client());
 
-        storage_classes.entry("btrfs-provisioner")
+        storage_classes.entry(&DYNAMIC_STORAGE_CLASS_NAME)
             .await?
             .or_insert(|| {
-                println!("Creating StorageClass");
+                println!("Creating dynamic StorageClass {}", *DYNAMIC_STORAGE_CLASS_NAME);
 
                 StorageClass {
                     provisioner: PROVISIONER_NAME.into(),
                     allow_volume_expansion: Some(false),
                     metadata: ObjectMeta {
-                        name: Some(STORAGE_CLASS_NAME.into()),
-                        ..Default::default()
+                        name: Some(STORAGE_CLASS_NAME_PATTERN.to_owned()),
+                        labels: Some(BTreeMap::from([
+                            (STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME.into(), "*".into())
+                        ])),
+                        ..ObjectMeta::default()
                     },
-                    ..Default::default()
+                    ..StorageClass::default()
                 }
             })
             .commit(&PostParams::default())
@@ -272,7 +324,7 @@ impl Controller {
     /// - `node_name` - The name of the Node the Job should schedule its Pod on
     /// - `args` - CLI arguments for the btrfs-provisioner binary
     /// - `job_type` - A [JobType] to use for finding existing Jobs
-    async fn run_provisioner_job(&self, name: &str, node_name: &str, args: &[&str], job_type: ProvisionerJobType) -> Result<()> {
+    async fn run_provisioner_job(&self, name: &str, node_name: &str, args: &[&str], job_type: ProvisionerJobType) -> Result<RunJobResult> {
         let jobs = Api::<Job>::namespaced(self.client(), NAMESPACE.as_str());
 
         // Cancel if there already is a job matching job_type's labels
@@ -281,7 +333,7 @@ impl Controller {
             limit: Some(1),
             ..ListParams::default()
         }).await?.items.as_slice() {
-            bail!("Job already exists for this action: {}", existing_lob.full_name());
+            return Ok(RunJobResult::AlreadyExisting(existing_lob.to_owned()));
         }
 
         // Deploy the Job...
@@ -330,6 +382,11 @@ impl Controller {
                                     value: Some(if *ARCHIVE_ON_DELETE { "true" } else { "false" }.into()),
                                     ..EnvVar::default()
                                 },
+                                EnvVar {
+                                    name: "STORAGE_CLASS_PER_NODE".into(),
+                                    value: Some(if *STORAGE_CLASS_PER_NODE { "true" } else { "false" }.into()),
+                                    ..EnvVar::default()
+                                },
                             ]),
                             security_context: Some(SecurityContext {
                                 privileged: Some(true),
@@ -359,6 +416,6 @@ impl Controller {
             ..Job::default()
         }).await?;
 
-        Ok(())
+        Ok(RunJobResult::Deployed)
     }
 }

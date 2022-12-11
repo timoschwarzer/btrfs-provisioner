@@ -5,17 +5,18 @@ use chrono::Utc;
 use color_eyre::eyre::{bail, eyre};
 use color_eyre::Result;
 use k8s_openapi::api::core::v1::{LocalVolumeSource, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeSpec, ResourceRequirements, VolumeNodeAffinity};
+use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta};
 use kube::{Api, Client, Config, Resource, ResourceExt};
-use kube::api::{Patch, PatchParams, PostParams};
+use kube::api::{ListParams, Patch, PatchParams, PostParams};
 use kube::api::entry::Entry;
-use mkdirp::mkdirp;
 use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
 
 use crate::config::*;
 use crate::btrfs_volume_metadata::BtrfsVolumeMetadata;
 use crate::btrfs_wrapper::BtrfsWrapper;
+use crate::controller::storage_class_utils::is_controlling_storage_class;
 use crate::ext::{PathBufExt, ProvisionerResourceExt};
 use crate::quantity_parser::QuantityParser;
 
@@ -52,7 +53,6 @@ impl Provisioner {
 
     /// Provisions a PV by a PVC
     pub async fn provision_persistent_volume(&self, claim: &PersistentVolumeClaim) -> Result<()> {
-        Provisioner::prepare_directories()?;
         let client = self.client();
 
         let persistent_volumes = Api::<PersistentVolume>::all(client);
@@ -61,6 +61,7 @@ impl Provisioner {
         if let PersistentVolumeClaim {
             spec: Some(
                 PersistentVolumeClaimSpec {
+                    storage_class_name: Some(storage_class_name),
                     resources: Some(
                         ResourceRequirements {
                             requests: Some(requests), ..
@@ -118,7 +119,7 @@ impl Provisioner {
                     claim_ref: Some(claim.object_ref(&())),
                     access_modes: Some(vec![String::from("ReadWriteOnce")]),
                     capacity: Some(requests.clone()),
-                    storage_class_name: Some(STORAGE_CLASS_NAME.into()),
+                    storage_class_name: Some(storage_class_name.to_owned()),
                     node_affinity: Some(VolumeNodeAffinity {
                         required: Some(NodeSelector {
                             node_selector_terms: vec![NodeSelectorTerm {
@@ -168,8 +169,8 @@ impl Provisioner {
                 }
             ), ..
         } = &volume {
-            if storage_class_name != STORAGE_CLASS_NAME {
-                bail!("StorageClass name of {} does not match provisioner storage class name", volume.name_any());
+            if !is_controlling_storage_class(self.client(), storage_class_name).await? {
+                bail!("StorageClass {} is not controlled by btrfs-provisioner", volume.name_any());
             }
 
             let finalizer_index = finalizers
@@ -232,6 +233,46 @@ impl Provisioner {
         }
     }
 
+    /// Initializes the Node this Provisioner runs on
+    pub async fn initialize_node(&self) -> Result<()> {
+        let storage_classes = Api::<StorageClass>::all(self.client());
+
+        let volumes_dir_host_path = Provisioner::get_host_path(&[&VOLUMES_DIR])?;
+
+        if !volumes_dir_host_path.exists() {
+            bail!("Volumes root path '{}' does not exist on this node, please create it manually.", *VOLUMES_DIR);
+        }
+
+        if *STORAGE_CLASS_PER_NODE {
+            println!("Creating StorageClass for node {}", &self.node_name);
+
+            if let [existing_storage_class] = storage_classes.list(&ListParams {
+                label_selector: Some(format!("{}={}", STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME, &self.node_name)),
+                limit: Some(1),
+                ..ListParams::default()
+            }).await?.items.as_slice() {
+                bail!("StorageClass for node {} already exists: {}", &self.node_name, existing_storage_class.name_any());
+            }
+
+            storage_classes.create(&PostParams::default(), &StorageClass {
+                provisioner: PROVISIONER_NAME.into(),
+                allow_volume_expansion: Some(false),
+                metadata: ObjectMeta {
+                    name: Some(STORAGE_CLASS_NAME_PATTERN.to_owned().replace("{}", &self.node_name)),
+                    labels: Some(BTreeMap::from([
+                        (STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME.into(), self.node_name.to_owned())
+                    ])),
+                    ..ObjectMeta::default()
+                },
+                ..StorageClass::default()
+            }).await?;
+        } else {
+            todo!("Dynamic StorageClass not supported yet");
+        }
+
+        Ok(())
+    }
+
     /// Returns the absolute path to an absolute path in the host filesystem
     pub fn get_host_path(path: &[&str]) -> Result<PathBuf> {
         let mut path_buf = PathBuf::new();
@@ -270,14 +311,6 @@ impl Provisioner {
             if let Entry::Vacant(_) = persistent_volumes.entry(&generated_name).await? {
                 return Ok(generated_name);
             }
-        }
-    }
-
-    /// Makes sure [VOLUMES_DIR] exists
-    fn prepare_directories() -> Result<()> {
-        match mkdirp(VOLUMES_DIR.as_str()) {
-            Err(e) => panic!("Error while creating volume directory at {}: {}", VOLUMES_DIR.as_str(), e),
-            Ok(_) => Ok(())
         }
     }
 }
