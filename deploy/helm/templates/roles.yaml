@@ -13,6 +13,9 @@ kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: {{ .name }}
+  {{- if not .clusterRole }}
+  namespace: {{ $.Release.Namespace }}
+  {{- end }}
 rules:
   {{- toYaml .rules | nindent 2 }}
 ---
