@@ -1,0 +1,78 @@
+image:
+  pullPolicy: Always
+  repository: ghcr.io/timoschwarzer/btrfs-provisioner
+  tag: latest
+
+serviceAccount:
+  create: true
+  name: btrfs-provisioner-service-account
+
+roles:
+  - name: btrfs-provisioner-cluster-role
+    clusterRole: true
+    rules:
+      - apiGroups: [""]
+        resources: ["persistentvolumeclaims", "configmaps"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get", "list", "watch", "patch"]
+      - apiGroups: [""]
+        resources: ["endpoints", "persistentvolumes", "pods"]
+        verbs: ["*"]
+      - apiGroups: [""]
+        resources: ["events"]
+        verbs: ["create", "patch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["*"]
+  - name: btrfs-provisioner-role
+    clusterRole: false
+    rules:
+      - apiGroups: ["batch"]
+        resources: ["jobs"]
+        verbs: ["*"]
+
+env:
+  IMAGE: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+
+service:
+  main:
+    enabled: false
+
+probes:
+  liveness:
+    enabled: false
+
+  readiness:
+    enabled: false
+
+  startup:
+    enabled: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+      - SETPCAP
+      - MKNOD
+      - AUDIT_WRITE
+      - CHOWN
+      - NET_RAW
+      - DAC_OVERRIDE
+      - FOWNER
+      - FSETID
+      - KILL
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+      - SYS_CHROOT
+      - SETFCAP
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+
+enableServiceLinks: false

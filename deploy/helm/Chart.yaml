@@ -1,0 +1,14 @@
+apiVersion: v2
+description: btrfs-provisioner helm chart
+type: application
+name: btrfs-provisioner
+version: 1.0.0
+appVersion: 1.0.0
+kubeVersion: '>=1.17.0-0'
+dependencies:
+  - name: common
+    version: 4.5.2
+    repository: https://library-charts.k8s-at-home.com
+    import-values:
+      - child: addons
+        parent: addons
