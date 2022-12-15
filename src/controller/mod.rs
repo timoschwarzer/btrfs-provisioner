@@ -63,8 +63,8 @@ impl Controller {
 
     /// Starts the Controller
     pub async fn run(&mut self) -> Result<()> {
-        if !*STORAGE_CLASS_PER_NODE {
-            todo!("Dynamic StorageClass is not supported yet (STORAGE_CLASS_PER_NODE=false)");
+        if *DYNAMIC_STORAGE_CLASS_ENABLED {
+            todo!("Dynamic StorageClass is not supported yet (DYNAMIC_STORAGE_CLASS_ENABLED=true)");
         }
 
         println!("Controller started.");
@@ -301,7 +301,7 @@ impl Controller {
                     provisioner: PROVISIONER_NAME.into(),
                     allow_volume_expansion: Some(false),
                     metadata: ObjectMeta {
-                        name: Some(STORAGE_CLASS_NAME_PATTERN.to_owned()),
+                        name: Some(STORAGE_CLASS_PER_NODE_NAME_PATTERN.to_owned()),
                         labels: Some(BTreeMap::from([
                             (STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME.into(), "*".into())
                         ])),
@@ -383,8 +383,13 @@ impl Controller {
                                     ..EnvVar::default()
                                 },
                                 EnvVar {
-                                    name: "STORAGE_CLASS_PER_NODE".into(),
-                                    value: Some(if *STORAGE_CLASS_PER_NODE { "true" } else { "false" }.into()),
+                                    name: "STORAGE_CLASS_PER_NODE_ENABLED".into(),
+                                    value: Some(if *STORAGE_CLASS_PER_NODE_ENABLED { "true" } else { "false" }.into()),
+                                    ..EnvVar::default()
+                                },
+                                EnvVar {
+                                    name: "STORAGE_CLASS_PER_NODE_NAME_PATTERN".into(),
+                                    value: Some(STORAGE_CLASS_PER_NODE_NAME_PATTERN.to_owned()),
                                     ..EnvVar::default()
                                 },
                             ]),

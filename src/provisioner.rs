@@ -243,7 +243,7 @@ impl Provisioner {
             bail!("Volumes root path '{}' does not exist on this node, please create it manually.", *VOLUMES_DIR);
         }
 
-        if *STORAGE_CLASS_PER_NODE {
+        if *STORAGE_CLASS_PER_NODE_ENABLED {
             println!("Creating StorageClass for node {}", &self.node_name);
 
             if let [existing_storage_class] = storage_classes.list(&ListParams {
@@ -258,7 +258,7 @@ impl Provisioner {
                 provisioner: PROVISIONER_NAME.into(),
                 allow_volume_expansion: Some(false),
                 metadata: ObjectMeta {
-                    name: Some(STORAGE_CLASS_NAME_PATTERN.to_owned().replace("{}", &self.node_name)),
+                    name: Some(STORAGE_CLASS_PER_NODE_NAME_PATTERN.to_owned().replace("{}", &self.node_name)),
                     labels: Some(BTreeMap::from([
                         (STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME.into(), self.node_name.to_owned())
                     ])),
@@ -266,8 +266,6 @@ impl Provisioner {
                 },
                 ..StorageClass::default()
             }).await?;
-        } else {
-            todo!("Dynamic StorageClass not supported yet");
         }
 
         Ok(())

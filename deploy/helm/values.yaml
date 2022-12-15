@@ -33,8 +33,41 @@ roles:
         resources: ["jobs"]
         verbs: ["*"]
 
+# Configuration for btrfs-provisioner
+config:
+
+  # The directory where volumes are stored
+  volumesDir: /volumes
+
+  # Archive volume contents instead of deleting them when the associated PersistentVolume is deleted
+  # You need to clean up archives manually when you enable this option.
+  archiveOnDelete: false
+
+  # Options for the dynamic StorageClass
+  dynamicStorageClass:
+    # Enable the dynamic StorageClass (currently unsupported by btrfs-provisioner).
+    # Disabling this will not remove an existing StorageClass
+    enable: false
+    # The name of the dynamic StorageClass
+    name: btrfs-provisioner
+
+  # Options for the per-node StorageClasses
+  storageClassPerNode:
+    # Enable per-node StorageClasses. Disabling this will not remove existing StorageClasses.
+    enable: true
+    # The name pattern after which the StorageClasses will be created
+    # {} will be replaced by the name of the Node
+    namePattern: btrfs-provisioner-{}
+
 env:
   IMAGE: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+  NAMESPACE: "{{ $.Release.Namespace }}"
+  VOLUMES_DIR: "{{ .Values.config.volumesDir }}"
+  ARCHIVE_ON_DELETE: "{{ .Values.config.archiveOnDelete }}"
+  DYNAMIC_STORAGE_CLASS: "{{ .Values.config.dynamicStorageClass.enable }}"
+  DYNAMIC_STORAGE_CLASS_NAME: "{{ .Values.config.dynamicStorageClassName }}"
+  STORAGE_CLASS_PER_NODE: "{{ .Values.config.storageClassPerNode.enable }}"
+  STORAGE_CLASS_PER_NODE_NAME_PATTERN: "{{ .Values.config.storageClassPerNode.namePattern }}"
 
 service:
   main:
