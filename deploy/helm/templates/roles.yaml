@@ -1,5 +1,3 @@
-
-
 {{- $values := .Values }}
 {{- with $values -}}
   {{- if .roles }}
