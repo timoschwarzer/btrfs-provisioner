@@ -50,6 +50,8 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
 
   release-helm-chart:
+    # Run only on tags
+    if: startsWith(github.event.ref, 'refs/tags')
     # Wait for the images to be published
     needs: [docker-build-and-push]
     permissions:
