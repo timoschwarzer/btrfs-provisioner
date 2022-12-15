@@ -1,7 +1,6 @@
 image:
   pullPolicy: Always
   repository: ghcr.io/timoschwarzer/btrfs-provisioner
-  tag: latest
 
 serviceAccount:
   create: true
@@ -60,7 +59,7 @@ config:
     namePattern: btrfs-provisioner-{}
 
 env:
-  IMAGE: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+  IMAGE: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
   NAMESPACE: "{{ $.Release.Namespace }}"
   VOLUMES_DIR: "{{ .Values.config.volumesDir }}"
   ARCHIVE_ON_DELETE: "{{ .Values.config.archiveOnDelete }}"
