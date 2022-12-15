@@ -1,0 +1,22 @@
+apiVersion: v1
+entries:
+  btrfs-provisioner:
+  - apiVersion: v2
+    appVersion: 0.3.0
+    created: "2022-12-15T16:30:52.975599534Z"
+    dependencies:
+    - import-values:
+      - child: addons
+        parent: addons
+      name: common
+      repository: https://library-charts.k8s-at-home.com
+      version: 4.5.2
+    description: btrfs-provisioner helm chart
+    digest: e4fb63fc70a37f584a800607c0aeb8f4fbcdc0d55d2d95cb290f184fb7b7bbd6
+    kubeVersion: '>=1.17.0-0'
+    name: btrfs-provisioner
+    type: application
+    urls:
+    - https://timoschwarzer.github.io/btrfs-provisioner/btrfs-provisioner-1.0.0.tgz
+    version: 1.0.0
+generated: "2022-12-15T16:30:52.97030754Z"
