@@ -105,7 +105,6 @@ impl Provisioner {
 
             persistent_volumes.create(&PostParams::default(), &PersistentVolume {
                 metadata: ObjectMeta {
-                    labels: Some(claim.labels().clone()),
                     annotations: Some(annotations),
                     name: Some(pv_name.clone()),
                     finalizers: Some(vec![FINALIZER_NAME.into()]),
