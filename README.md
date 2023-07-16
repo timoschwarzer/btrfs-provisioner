@@ -15,7 +15,8 @@ This is a (work in progress) volume provisioner for Kubernetes leveraging the BT
 
 - Volume snapshots
 - Volume backups using [Borg Backup](https://www.borgbackup.org/)
-- Dynamic StorageClass
+- Dynamic (single) StorageClass (automatic node selection and assignment)
+- Automatically moving volumes between nodes
 
 
 ## Getting started
@@ -29,9 +30,17 @@ This is a (work in progress) volume provisioner for Kubernetes leveraging the BT
 
 ### Installation
 
-There are only plain Kubernetes manifests yet. A Helm chart should come soon when the provisioner reaches a stable state.
+First of all, **this is experimental software**. You're up on your own should you lose data.
 
-To deploy and test the BTRFS provisioner in your cluster, deploy the manifests in the `deploy` directory:
+
+#### Helm
+
+`helm repo add btrfs-provisioner https://timoschwarzer.github.io/btrfs-provisioner`
+
+
+#### Manual
+
+Deploy the manifests in the `deploy` directory:
 
 ```shell
 kubectl apply -f deploy/meta.yaml
