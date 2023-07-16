@@ -90,13 +90,13 @@ impl Controller {
         let (_, pvc_writer) = reflector::store();
         let (_, pv_writer) = reflector::store();
         let (_, node_writer) = reflector::store();
-        let pvc_reflector = reflector(pvc_writer, watcher(persistent_volume_claims, ListParams::default()))
+        let pvc_reflector = reflector(pvc_writer, watcher(persistent_volume_claims, watcher::Config::default()))
             .map_ok(WatchedResource::Pvc);
-        let pv_reflector = reflector(pv_writer, watcher(persistent_volumes, ListParams::default()))
+        let pv_reflector = reflector(pv_writer, watcher(persistent_volumes, watcher::Config::default()))
             .map_ok(WatchedResource::Pv);
-        let node_reflector = reflector(node_writer, watcher(nodes, ListParams {
+        let node_reflector = reflector(node_writer, watcher(nodes, watcher::Config {
             label_selector: Some("!node-role.kubernetes.io/master".into()),
-            ..ListParams::default()
+            ..watcher::Config::default()
         }))
             .map_ok(WatchedResource::Node);
 

@@ -218,7 +218,7 @@ impl Provisioner {
             persistent_volumes.patch(
                 &volume.name_any(),
                 &PatchParams::default(),
-                &Patch::<json_patch::Patch>::Json(json_patch::from_value(serde_json::json!([
+                &Patch::<json_patch::Patch>::Json(serde_json::from_value(serde_json::json!([
                     {
                         "op": "remove",
                         "path": finalizer_path
