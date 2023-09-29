@@ -34,7 +34,6 @@ roleRef:
   kind: ClusterRole
   {{- else }}
   kind: Role
-  namespace: {{ $.Release.Namespace }}
   {{- end }}
   name: {{ .name }}
 subjects:
