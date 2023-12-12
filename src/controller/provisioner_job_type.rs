@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use crate::config::*;
 use color_eyre::eyre::{bail, eyre};
 use color_eyre::Result;
-use crate::config::*;
+use std::collections::BTreeMap;
 
 pub struct ProvisionJobArgs {
     pub target_pvc_uid: String,
@@ -29,15 +29,44 @@ impl ProvisionerJobType {
 
         match labels.get(JOB_TYPE_LABEL).unwrap().as_str() {
             JOB_TYPE_PROVISION_VALUE => Ok(ProvisionerJobType::Provision(ProvisionJobArgs {
-                target_pvc_uid: labels.get(JOB_TARGET_UID_LABEL).ok_or_else(|| eyre!("Required label {} missing for type={}", JOB_TARGET_UID_LABEL, JOB_TYPE_PROVISION_VALUE))?.to_owned(),
+                target_pvc_uid: labels
+                    .get(JOB_TARGET_UID_LABEL)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "Required label {} missing for type={}",
+                            JOB_TARGET_UID_LABEL,
+                            JOB_TYPE_PROVISION_VALUE
+                        )
+                    })?
+                    .to_owned(),
             })),
             JOB_TYPE_DELETE_VALUE => Ok(ProvisionerJobType::Delete(DeleteJobArgs {
-                target_pv_uid: labels.get(JOB_TARGET_UID_LABEL).ok_or_else(|| eyre!("Required label {} missing for type={}", JOB_TARGET_UID_LABEL, JOB_TYPE_DELETE_VALUE))?.to_owned(),
+                target_pv_uid: labels
+                    .get(JOB_TARGET_UID_LABEL)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "Required label {} missing for type={}",
+                            JOB_TARGET_UID_LABEL,
+                            JOB_TYPE_DELETE_VALUE
+                        )
+                    })?
+                    .to_owned(),
             })),
-            JOB_TYPE_INITIALIZE_NODE_VALUE => Ok(ProvisionerJobType::InitializeNode(InitializeNodeJobArgs {
-                target_node_uid: labels.get(JOB_TARGET_UID_LABEL).ok_or_else(|| eyre!("Required label {} missing for type={}", JOB_TARGET_UID_LABEL, JOB_TYPE_INITIALIZE_NODE_VALUE))?.to_owned(),
-            })),
-            other_job_type => bail!("Invalid job type: {}", other_job_type)
+            JOB_TYPE_INITIALIZE_NODE_VALUE => {
+                Ok(ProvisionerJobType::InitializeNode(InitializeNodeJobArgs {
+                    target_node_uid: labels
+                        .get(JOB_TARGET_UID_LABEL)
+                        .ok_or_else(|| {
+                            eyre!(
+                                "Required label {} missing for type={}",
+                                JOB_TARGET_UID_LABEL,
+                                JOB_TYPE_INITIALIZE_NODE_VALUE
+                            )
+                        })?
+                        .to_owned(),
+                }))
+            }
+            other_job_type => bail!("Invalid job type: {}", other_job_type),
         }
     }
 

@@ -1,10 +1,10 @@
-use std::io::{stderr, stdout, Write};
-use std::process::{Command, Output};
+use crate::config::*;
 use color_eyre::eyre::bail;
 use color_eyre::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
-use crate::config::*;
+use std::io::{stderr, stdout, Write};
+use std::process::{Command, Output};
 
 pub struct BtrfsWrapper {
     chroot_to_host: bool,
@@ -44,7 +44,10 @@ impl BtrfsWrapper {
     }
 
     pub fn qgroup_limit(&self, bytes: u64, path: &str) -> Result<Output> {
-        self.run_command("btrfs", &["qgroup", "limit", bytes.to_string().as_str(), path])
+        self.run_command(
+            "btrfs",
+            &["qgroup", "limit", bytes.to_string().as_str(), path],
+        )
     }
 
     pub fn qgroup_destroy(&self, qgroup: &str, path: &str) -> Result<Output> {
@@ -94,14 +97,11 @@ impl BtrfsWrapper {
                     Command::new("chroot")
                         .args(vec![path.as_str(), command])
                         .args(args),
-                )
+                );
             }
         }
 
-        let output = run_prepared_command(
-            Command::new(command)
-                .args(args),
-        )?;
+        let output = run_prepared_command(Command::new(command).args(args))?;
 
         if !&output.status.success() {
             bail!("`btrfs {}` failed: {}", &args.join(" "), &output.status);

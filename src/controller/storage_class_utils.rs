@@ -1,7 +1,7 @@
+use crate::config::*;
+use color_eyre::Result;
 use k8s_openapi::api::storage::v1::StorageClass;
 use kube::{Api, Client, ResourceExt};
-use color_eyre::Result;
-use crate::config::*;
 
 pub trait StorageClassExt {
     /// Returns whether this StorageClass is managed by btrfs-provisioner
@@ -17,9 +17,9 @@ impl StorageClassExt for StorageClass {
     }
 
     fn get_controlling_node_name(&self) -> Option<&String> {
-        self
-            .metadata
-            .labels.as_ref()?
+        self.metadata
+            .labels
+            .as_ref()?
             .get(STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME)
     }
 }
@@ -29,7 +29,7 @@ async fn get_storage_class_by_name(client: Client, name: &str) -> Result<Option<
     let storage_classes = Api::<StorageClass>::all(client);
 
     if let Some(storage_class) = storage_classes.get_opt(name).await? {
-        return Ok(Some(storage_class))
+        return Ok(Some(storage_class));
     } else {
         eprintln!("Storage class '{}' not found", name);
     }
@@ -49,18 +49,26 @@ pub async fn is_controlling_storage_class(client: Client, name: &str) -> Result<
 }
 
 /// Returns whether a StorageClass called `name` is controlled by Node `node`
-pub async fn node_can_control_storage_class(client: Client, storage_class_name: &str, node_name: &str) -> Result<bool> {
+pub async fn node_can_control_storage_class(
+    client: Client,
+    storage_class_name: &str,
+    node_name: &str,
+) -> Result<bool> {
     let storage_class = get_storage_class_by_name(client, storage_class_name).await?;
 
     if let Some(storage_class) = storage_class {
         if !storage_class.is_controlling() {
-            return Ok(false)
+            return Ok(false);
         }
 
         if let Some(assigned_node) = storage_class.get_controlling_node_name() {
             return Ok(assigned_node == "*" || assigned_node == node_name);
         } else {
-            eprintln!("StorageClass does not have required annotation {}: {}", STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME, storage_class.name_any());
+            eprintln!(
+                "StorageClass does not have required annotation {}: {}",
+                STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME,
+                storage_class.name_any()
+            );
         }
     }
 
@@ -76,21 +84,24 @@ impl StorageClassNodeAssignment {
     pub fn from_string(controlling_node_name: &str) -> StorageClassNodeAssignment {
         match controlling_node_name {
             "*" => StorageClassNodeAssignment::Dynamic,
-            node_name => StorageClassNodeAssignment::SingleNode { node_name: node_name.to_owned() }
+            node_name => StorageClassNodeAssignment::SingleNode {
+                node_name: node_name.to_owned(),
+            },
         }
     }
 }
 
 /// Returns [StorageClassNodeAssignment] for the StorageClass called `storage_class_name`
-pub async fn get_node_assigned_to_storage_class(client: Client, storage_class_name: &str) -> Result<Option<StorageClassNodeAssignment>> {
+pub async fn get_node_assigned_to_storage_class(
+    client: Client,
+    storage_class_name: &str,
+) -> Result<Option<StorageClassNodeAssignment>> {
     let storage_class = get_storage_class_by_name(client, storage_class_name).await?;
 
     if let Some(storage_class) = storage_class {
-        return Ok(
-            storage_class
-                .get_controlling_node_name()
-                .map(|node_name| StorageClassNodeAssignment::from_string(node_name))
-        );
+        return Ok(storage_class
+            .get_controlling_node_name()
+            .map(|node_name| StorageClassNodeAssignment::from_string(node_name)));
     }
 
     Ok(None)

@@ -1,7 +1,7 @@
-use std::path::PathBuf;
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
 use kube::ResourceExt;
+use std::path::PathBuf;
 
 pub trait ProvisionerResourceExt: ResourceExt {
     /// Returns the full name of the resource in the format `<namespace>/<name>`
@@ -24,6 +24,8 @@ pub trait PathBufExt {
 
 impl PathBufExt for PathBuf {
     fn as_str(&self) -> Result<&str> {
-        return self.to_str().ok_or_else(|| eyre!("Could not convert path to string"))
+        return self
+            .to_str()
+            .ok_or_else(|| eyre!("Could not convert path to string"));
     }
 }

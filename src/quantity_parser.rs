@@ -24,7 +24,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use color_eyre::{Result, Report, eyre::eyre};
+use color_eyre::{eyre::eyre, Report, Result};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use regex::Regex;
 

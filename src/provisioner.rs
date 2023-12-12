@@ -1,21 +1,25 @@
-use std::collections::{BTreeMap};
-use std::path::PathBuf;
 use chrono::Utc;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use color_eyre::eyre::{bail, eyre};
 use color_eyre::Result;
-use k8s_openapi::api::core::v1::{LocalVolumeSource, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeSpec, ResourceRequirements, VolumeNodeAffinity};
+use k8s_openapi::api::core::v1::{
+    LocalVolumeSource, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, PersistentVolume,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeSpec, ResourceRequirements,
+    VolumeNodeAffinity,
+};
 use k8s_openapi::api::storage::v1::StorageClass;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta};
-use kube::{Api, Client, Config, Resource, ResourceExt};
-use kube::api::{ListParams, Patch, PatchParams, PostParams};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::entry::Entry;
-use rand::{Rng, thread_rng};
+use kube::api::{ListParams, Patch, PatchParams, PostParams};
+use kube::{Api, Client, Config, Resource, ResourceExt};
 use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 
-use crate::config::*;
 use crate::btrfs_volume_metadata::BtrfsVolumeMetadata;
 use crate::btrfs_wrapper::BtrfsWrapper;
+use crate::config::*;
 use crate::controller::storage_class_utils::is_controlling_storage_class;
 use crate::ext::{PathBufExt, ProvisionerResourceExt};
 use crate::quantity_parser::QuantityParser;
@@ -35,18 +39,24 @@ impl Provisioner {
     pub async fn create(node_name: String) -> Result<Self> {
         let client = Client::try_default()
             .await
-            .or_else(|_| Client::try_from(Config::incluster_env().expect("Failed to load in-cluster Kube config")))
+            .or_else(|_| {
+                Client::try_from(
+                    Config::incluster_env().expect("Failed to load in-cluster Kube config"),
+                )
+            })
             .expect("Failed to create Kube client");
 
-        Ok(Provisioner {
-            client,
-            node_name,
-        })
+        Ok(Provisioner { client, node_name })
     }
 
     /// Provisions a PV by a PVC name
-    pub async fn provision_persistent_volume_by_claim_name(&self, claim_namespace: &str, claim_name: &str) -> Result<()> {
-        let persistent_volume_claims = Api::<PersistentVolumeClaim>::namespaced(self.client(), claim_namespace);
+    pub async fn provision_persistent_volume_by_claim_name(
+        &self,
+        claim_namespace: &str,
+        claim_name: &str,
+    ) -> Result<()> {
+        let persistent_volume_claims =
+            Api::<PersistentVolumeClaim>::namespaced(self.client(), claim_namespace);
         let claim = persistent_volume_claims.get(claim_name).await?;
         self.provision_persistent_volume(&claim).await
     }
@@ -59,19 +69,25 @@ impl Provisioner {
 
         // Check that the PVC has a storage request
         if let PersistentVolumeClaim {
-            spec: Some(
-                PersistentVolumeClaimSpec {
+            spec:
+                Some(PersistentVolumeClaimSpec {
                     storage_class_name: Some(storage_class_name),
-                    resources: Some(
-                        ResourceRequirements {
-                            requests: Some(requests), ..
-                        }
-                    ), ..
-                }
-            ), ..
-        } = &claim {
-            let storage_request = requests.get("storage").ok_or_else(|| eyre!("PVC {} does not have a storage request", claim.full_name()))?;
-            let storage_request_bytes = storage_request.to_bytes()?.ok_or_else(|| eyre!("Failed to parse storage request: '{}'", storage_request.0))?;
+                    resources:
+                        Some(ResourceRequirements {
+                            requests: Some(requests),
+                            ..
+                        }),
+                    ..
+                }),
+            ..
+        } = &claim
+        {
+            let storage_request = requests.get("storage").ok_or_else(|| {
+                eyre!("PVC {} does not have a storage request", claim.full_name())
+            })?;
+            let storage_request_bytes = storage_request
+                .to_bytes()?
+                .ok_or_else(|| eyre!("Failed to parse storage request: '{}'", storage_request.0))?;
 
             println!("Provisioning claim {}", claim.full_name());
             let pv_name = self.generate_pv_name_for_claim(claim).await?;
@@ -93,7 +109,10 @@ impl Provisioner {
             println!("Enabling Quota on {}", volume_path_str);
             btrfs_wrapper.quota_enable(volume_path_str)?;
 
-            println!("Setting Quota limit on {} to {} bytes", volume_path_str, storage_request_bytes);
+            println!(
+                "Setting Quota limit on {} to {} bytes",
+                volume_path_str, storage_request_bytes
+            );
             btrfs_wrapper.qgroup_limit(storage_request_bytes as u64, volume_path_str)?;
 
             println!("Triggering subvolume rescan");
@@ -101,40 +120,48 @@ impl Provisioner {
 
             println!("Creating PersistentVolume {}", pv_name);
             let mut annotations: BTreeMap<String, String> = BTreeMap::new();
-            annotations.insert(PROVISIONED_BY_ANNOTATION_KEY.into(), PROVISIONER_NAME.into());
+            annotations.insert(
+                PROVISIONED_BY_ANNOTATION_KEY.into(),
+                PROVISIONER_NAME.into(),
+            );
 
-            persistent_volumes.create(&PostParams::default(), &PersistentVolume {
-                metadata: ObjectMeta {
-                    annotations: Some(annotations),
-                    name: Some(pv_name.clone()),
-                    finalizers: Some(vec![FINALIZER_NAME.into()]),
-                    ..Default::default()
-                },
-                spec: Some(PersistentVolumeSpec {
-                    local: Some(LocalVolumeSource {
-                        path: volume_path_str.into(),
-                        ..LocalVolumeSource::default()
-                    }),
-                    claim_ref: Some(claim.object_ref(&())),
-                    access_modes: Some(vec![String::from("ReadWriteOnce")]),
-                    capacity: Some(requests.clone()),
-                    storage_class_name: Some(storage_class_name.to_owned()),
-                    node_affinity: Some(VolumeNodeAffinity {
-                        required: Some(NodeSelector {
-                            node_selector_terms: vec![NodeSelectorTerm {
-                                match_expressions: Some(vec![NodeSelectorRequirement {
-                                    key: NODE_HOSTNAME_KEY.into(),
-                                    operator: "In".into(),
-                                    values: Some(vec![self.node_name.to_owned()]),
-                                }]),
-                                ..Default::default()
-                            }]
-                        })
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }).await?;
+            persistent_volumes
+                .create(
+                    &PostParams::default(),
+                    &PersistentVolume {
+                        metadata: ObjectMeta {
+                            annotations: Some(annotations),
+                            name: Some(pv_name.clone()),
+                            finalizers: Some(vec![FINALIZER_NAME.into()]),
+                            ..Default::default()
+                        },
+                        spec: Some(PersistentVolumeSpec {
+                            local: Some(LocalVolumeSource {
+                                path: volume_path_str.into(),
+                                ..LocalVolumeSource::default()
+                            }),
+                            claim_ref: Some(claim.object_ref(&())),
+                            access_modes: Some(vec![String::from("ReadWriteOnce")]),
+                            capacity: Some(requests.clone()),
+                            storage_class_name: Some(storage_class_name.to_owned()),
+                            node_affinity: Some(VolumeNodeAffinity {
+                                required: Some(NodeSelector {
+                                    node_selector_terms: vec![NodeSelectorTerm {
+                                        match_expressions: Some(vec![NodeSelectorRequirement {
+                                            key: NODE_HOSTNAME_KEY.into(),
+                                            operator: "In".into(),
+                                            values: Some(vec![self.node_name.to_owned()]),
+                                        }]),
+                                        ..Default::default()
+                                    }],
+                                }),
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await?;
 
             println!("Created volume {}", pv_name);
         } else {
@@ -156,20 +183,24 @@ impl Provisioner {
         let persistent_volumes = Api::<PersistentVolume>::all(self.client());
 
         if let PersistentVolume {
-            metadata: ObjectMeta {
-                finalizers: Some(finalizers),
-                ..
-            },
-            spec: Some(
-                PersistentVolumeSpec {
-                    storage_class_name: Some(
-                        storage_class_name
-                    ), ..
-                }
-            ), ..
-        } = &volume {
+            metadata:
+                ObjectMeta {
+                    finalizers: Some(finalizers),
+                    ..
+                },
+            spec:
+                Some(PersistentVolumeSpec {
+                    storage_class_name: Some(storage_class_name),
+                    ..
+                }),
+            ..
+        } = &volume
+        {
             if !is_controlling_storage_class(self.client(), storage_class_name).await? {
-                bail!("StorageClass {} is not controlled by btrfs-provisioner", volume.name_any());
+                bail!(
+                    "StorageClass {} is not controlled by btrfs-provisioner",
+                    volume.name_any()
+                );
             }
 
             let finalizer_index = finalizers
@@ -194,15 +225,25 @@ impl Provisioner {
                     btrfs_wrapper.qgroup_destroy(&qgroup, volume_path_str)?;
                 }
                 Err(e) => {
-                    println!("Could not detect a qgroup for volume {}: {}", volume_path_str, e)
+                    println!(
+                        "Could not detect a qgroup for volume {}: {}",
+                        volume_path_str, e
+                    )
                 }
             }
 
             if *ARCHIVE_ON_DELETE {
                 println!("Archiving on PV deletion is enabled, archiving volume...");
-                let volume_dir_name = btrfs_volume_metadata.path.file_name().ok_or_else(|| eyre!("Could not determine volume directory name"))?;
+                let volume_dir_name = btrfs_volume_metadata
+                    .path
+                    .file_name()
+                    .ok_or_else(|| eyre!("Could not determine volume directory name"))?;
                 let mut new_path = btrfs_volume_metadata.path.clone();
-                new_path.set_file_name(format!("_archive-{}-{}", Utc::now().timestamp(), volume_dir_name.to_str().unwrap()));
+                new_path.set_file_name(format!(
+                    "_archive-{}-{}",
+                    Utc::now().timestamp(),
+                    volume_dir_name.to_str().unwrap()
+                ));
                 let new_path_str = new_path.to_str().unwrap();
 
                 println!("Moving from {} to {}", volume_path_str, new_path_str);
@@ -215,16 +256,18 @@ impl Provisioner {
             println!("Removing finalizer");
             let finalizer_path = format!("/metadata/finalizers/{}", finalizer_index);
 
-            persistent_volumes.patch(
-                &volume.name_any(),
-                &PatchParams::default(),
-                &Patch::<json_patch::Patch>::Json(serde_json::from_value(serde_json::json!([
-                    {
-                        "op": "remove",
-                        "path": finalizer_path
-                    }
-                ]))?),
-            ).await?;
+            persistent_volumes
+                .patch(
+                    &volume.name_any(),
+                    &PatchParams::default(),
+                    &Patch::<json_patch::Patch>::Json(serde_json::from_value(serde_json::json!([
+                        {
+                            "op": "remove",
+                            "path": finalizer_path
+                        }
+                    ]))?),
+                )
+                .await?;
 
             Ok(())
         } else {
@@ -239,32 +282,57 @@ impl Provisioner {
         let volumes_dir_host_path = Provisioner::get_host_path(&[&VOLUMES_DIR])?;
 
         if !volumes_dir_host_path.exists() {
-            bail!("Volumes root path '{}' does not exist on this node, please create it manually.", *VOLUMES_DIR);
+            bail!(
+                "Volumes root path '{}' does not exist on this node, please create it manually.",
+                *VOLUMES_DIR
+            );
         }
 
         if *STORAGE_CLASS_PER_NODE_ENABLED {
             println!("Creating StorageClass for node {}", &self.node_name);
 
-            if let [existing_storage_class] = storage_classes.list(&ListParams {
-                label_selector: Some(format!("{}={}", STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME, &self.node_name)),
-                limit: Some(1),
-                ..ListParams::default()
-            }).await?.items.as_slice() {
-                bail!("StorageClass for node {} already exists: {}", &self.node_name, existing_storage_class.name_any());
+            if let [existing_storage_class] = storage_classes
+                .list(&ListParams {
+                    label_selector: Some(format!(
+                        "{}={}",
+                        STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME, &self.node_name
+                    )),
+                    limit: Some(1),
+                    ..ListParams::default()
+                })
+                .await?
+                .items
+                .as_slice()
+            {
+                bail!(
+                    "StorageClass for node {} already exists: {}",
+                    &self.node_name,
+                    existing_storage_class.name_any()
+                );
             }
 
-            storage_classes.create(&PostParams::default(), &StorageClass {
-                provisioner: PROVISIONER_NAME.into(),
-                allow_volume_expansion: Some(false),
-                metadata: ObjectMeta {
-                    name: Some(STORAGE_CLASS_PER_NODE_NAME_PATTERN.to_owned().replace("{}", &self.node_name)),
-                    labels: Some(BTreeMap::from([
-                        (STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME.into(), self.node_name.to_owned())
-                    ])),
-                    ..ObjectMeta::default()
-                },
-                ..StorageClass::default()
-            }).await?;
+            storage_classes
+                .create(
+                    &PostParams::default(),
+                    &StorageClass {
+                        provisioner: PROVISIONER_NAME.into(),
+                        allow_volume_expansion: Some(false),
+                        metadata: ObjectMeta {
+                            name: Some(
+                                STORAGE_CLASS_PER_NODE_NAME_PATTERN
+                                    .to_owned()
+                                    .replace("{}", &self.node_name),
+                            ),
+                            labels: Some(BTreeMap::from([(
+                                STORAGE_CLASS_CONTROLLING_NODE_LABEL_NAME.into(),
+                                self.node_name.to_owned(),
+                            )])),
+                            ..ObjectMeta::default()
+                        },
+                        ..StorageClass::default()
+                    },
+                )
+                .await?;
         }
 
         Ok(())
@@ -303,7 +371,12 @@ impl Provisioner {
                 .map(|u| char::from(u).to_ascii_lowercase())
                 .collect();
 
-            let generated_name = format!("{}-{}-{}", claim.namespace().unwrap_or_else(|| "default".into()), claim.name_any(), rand_string);
+            let generated_name = format!(
+                "{}-{}-{}",
+                claim.namespace().unwrap_or_else(|| "default".into()),
+                claim.name_any(),
+                rand_string
+            );
 
             if let Entry::Vacant(_) = persistent_volumes.entry(&generated_name).await? {
                 return Ok(generated_name);

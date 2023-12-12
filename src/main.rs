@@ -1,17 +1,17 @@
-use build_time::build_time_local;
-use crate::provisioner::Provisioner;
-use clap::{Args, Parser};
-use clap::Subcommand;
-use color_eyre::Result;
 use crate::controller::Controller;
+use crate::provisioner::Provisioner;
+use build_time::build_time_local;
+use clap::Subcommand;
+use clap::{Args, Parser};
+use color_eyre::Result;
 
-pub mod ext;
-pub mod provisioner;
-pub mod controller;
-pub mod quantity_parser;
-pub mod config;
 pub mod btrfs_volume_metadata;
 pub mod btrfs_wrapper;
+pub mod config;
+pub mod controller;
+pub mod ext;
+pub mod provisioner;
+pub mod quantity_parser;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -32,7 +32,10 @@ struct ProvisionArgs {
     pvc_namespace: String,
     pvc_name: String,
 
-    #[clap(env = "NODE_NAME", help = "The name of the Node the provisioner runs on")]
+    #[clap(
+        env = "NODE_NAME",
+        help = "The name of the Node the provisioner runs on"
+    )]
     node_name: String,
 }
 
@@ -40,13 +43,19 @@ struct ProvisionArgs {
 struct DeleteArgs {
     pv_name: String,
 
-    #[clap(env = "NODE_NAME", help = "The name of the Node the provisioner runs on")]
+    #[clap(
+        env = "NODE_NAME",
+        help = "The name of the Node the provisioner runs on"
+    )]
     node_name: String,
 }
 
 #[derive(Args)]
 struct InitializeNodeArgs {
-    #[clap(env = "NODE_NAME", help = "The name of the Node the provisioner runs on")]
+    #[clap(
+        env = "NODE_NAME",
+        help = "The name of the Node the provisioner runs on"
+    )]
     node_name: String,
 }
 
@@ -54,7 +63,11 @@ struct InitializeNodeArgs {
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
-    println!("Running btrfs-provisioner v{} built at {}", config::VERSION, build_time_local!());
+    println!(
+        "Running btrfs-provisioner v{} built at {}",
+        config::VERSION,
+        build_time_local!()
+    );
 
     let cli = Cli::parse();
 
@@ -83,9 +96,6 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        Controller::create()
-            .await?
-            .run()
-            .await
+        Controller::create().await?.run().await
     }
 }
